@@ -27,6 +27,7 @@ jobs:
       - name: Run script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python script.py
 
       - name: Upload Map Artifact
