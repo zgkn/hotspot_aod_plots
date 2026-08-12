@@ -35,5 +35,5 @@ jobs:
         with:
           name: hotspots-aod-map
           path: output/
-          retention-days: 7
+          retention-days: 4
           
