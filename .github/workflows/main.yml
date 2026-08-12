@@ -1,1 +1,35 @@
+name: Generate Hotspots Map
 
+on:
+  schedule:
+    - cron: '30 19 * * *' # Runs at 3:30 AM SGT (7:30 PM UTC previous day)
+    - cron: '30 7 * * *'  # Runs at 3:30 PM SGT (7:30 AM UTC)
+  workflow_dispatch:      # Allows manual triggering from the Actions tab
+
+jobs:
+  generate_map:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+
+      - name: Install Python dependencies
+        run: pip install boto3 xarray netcdf4 h5netcdf folium matplotlib requests
+
+      - name: Run script
+        run: python script.py
+
+      - name: Upload Map Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotspots-aod-map
+          path: output/
+          retention-days: 7          
