@@ -32,7 +32,7 @@ from folium.plugins import HeatMap
 # --- TELEGRAM CONFIGURATIONS ---
 # Token is pulled from GitHub Secrets for security
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = "-1001566412226"
+CHAT_ID = os.getenv("TELEGRAM_BOT_TOKEN")
 
 def send_telegram_message(text: str) -> bool:
     if not BOT_TOKEN:
