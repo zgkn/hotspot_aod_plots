@@ -2,9 +2,9 @@ name: Generate Hotspots Map
 
 on:
   schedule:
-    - cron: '30 19 * * *' # Runs at 3:30 AM SGT (7:30 PM UTC previous day)
-    - cron: '30 7 * * *'  # Runs at 3:30 PM SGT (7:30 AM UTC)
-  workflow_dispatch:      # Allows manual triggering from the Actions tab
+    - cron: '30 19 * * *' # 3:30 AM SGT (7:30 PM UTC)
+    - cron: '30 7 * * *'  # 3:30 PM SGT (7:30 AM UTC)
+  workflow_dispatch:      # Manual trigger button
 
 jobs:
   generate_map:
@@ -25,6 +25,8 @@ jobs:
         run: pip install boto3 xarray netcdf4 h5netcdf folium matplotlib requests
 
       - name: Run script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python script.py
 
       - name: Upload Map Artifact
@@ -32,4 +34,5 @@ jobs:
         with:
           name: hotspots-aod-map
           path: output/
-          retention-days: 7          
+          retention-days: 7
+          
