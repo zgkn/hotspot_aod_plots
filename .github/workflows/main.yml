@@ -2,8 +2,8 @@ name: Generate Hotspots Map
 
 on:
   schedule:
-    - cron: '30 19 * * *' # 3:30 AM SGT (7:30 PM UTC)
-    - cron: '15 7 * * *'  # 3:30 PM SGT (7:30 AM UTC)
+    - cron: '33 19 * * *' # 3:30 AM SGT (7:30 PM UTC)
+    - cron: '34 7 * * *'  # 3:30 PM SGT (7:30 AM UTC)
   workflow_dispatch:      # Manual trigger button
 
 jobs:
