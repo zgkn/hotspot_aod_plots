@@ -169,7 +169,7 @@ def main():
     yesterday_date = today_date - datetime.timedelta(days=1)
 
     sg_date_str = local_now.strftime('%Y%m%d_%H%M')
-    
+
     # IMPORTANT: Create output directory for GitHub Artifacts
     os.makedirs("output", exist_ok=True)
     output_filename = os.path.join("output", f"hotspots_aod_map_{sg_date_str}.html")
@@ -372,8 +372,13 @@ def main():
     m.get_root().html.add_child(folium.Element(composite_legend))
     folium.LayerControl(collapsed=False).add_to(m)
 
+    # Save a dynamically named copy for the Telegram upload
     m.save(output_filename)
-    print(f"\n[!] SUCCESS: Target structural mapping complete. Saved to '{output_filename}'")
+    
+    # Save an index.html copy for GitHub Pages deployment
+    m.save(os.path.join("output", "index.html"))
+    
+    print(f"\n[!] SUCCESS: Target structural mapping complete. Saved to '{output_filename}' and 'output/index.html'")
 
     send_telegram_message(f"🎨 *Section 3 Complete: Visualization Rendering*\n• Hotspots Rendered: `{hotspots_plotted}` fires.\n• Map file written: `{output_filename}`")
     send_telegram_file(output_filename, caption="📊 *Map Product Ready*\nHere is the compiled Southeast Asia active fire and aerosol overlay map.")
@@ -388,4 +393,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
