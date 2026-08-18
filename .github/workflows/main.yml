@@ -7,6 +7,11 @@ on:
     - cron: '34 7 * * *'  # 3:30 PM SGT (7:30 AM UTC)
   workflow_dispatch:      # Manual trigger button
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   generate_map:
     runs-on: ubuntu-latest
@@ -31,10 +36,18 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python script.py
 
-      - name: Upload Map Artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: hotspots-aod-map
           path: output/
-          retention-days: 4
-          
+
+  deploy_pages:
+    needs: generate_map
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
