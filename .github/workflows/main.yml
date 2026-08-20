@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: '32 04 * * *' # 4:32 AM UTC
     - cron: '33 19 * * *' # 3:30 AM SGT (7:30 PM UTC)
-    - cron: '27 7 * * *'  # 3:30 PM SGT (7:30 AM UTC)
+    - cron: '27 07 * * *'  # 3:30 PM SGT (7:30 AM UTC)
   workflow_dispatch:      # Manual trigger button
 
 permissions:
