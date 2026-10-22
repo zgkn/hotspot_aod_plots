@@ -154,8 +154,8 @@ def rasterize_aod(lats, lons, aods):
     norm_x = ((lons - SEA_LON[0]) / (SEA_LON[1] - SEA_LON[0]) * (res-1)).astype(int)
     mask = (norm_x >= 0) & (norm_x < res) & (norm_y >= 0) & (norm_y < res)
 
-    cmap = plt.get_cmap('YlGnBu')
-    colors = (cmap(np.power(np.clip(aods[mask], 0, 1.0), 0.5)) * 255).astype(np.uint8)
+    cmap = plt.get_cmap('turbo')
+    colors = (cmap(np.clip(aods[mask], 0, 5.0) / 5.0) * 255).astype(np.uint8)
     colors[:, 3] = 175
     rgba[norm_y[mask], norm_x[mask]] = colors
     return rgba
@@ -362,10 +362,10 @@ def main():
         </div>
         <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
         <b style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">💨 Aerosol Loading (AOD Today)</b>
-        <div style="display: inline-block; width: 100%; height: 12px; background: linear-gradient(to right, #FFFFE5, #41B6C4, #081D58); border-radius: 2px; opacity: 0.8;"></div>
+        <div style="display: inline-block; width: 100%; height: 12px; background: linear-gradient(to right, #440154, #31688e, #35b779, #fde724); border-radius: 2px; opacity: 0.8;"></div>
         <div style="width: 100%; display: flex; justify-content: space-between; padding-top: 2px; font-size: 9px; color: #aaa;">
             <span>0.0 (Clear)</span>
-            <span>3.0+ (Dense Plume)</span>
+            <span>5.0+ (Dense Plume)</span>
         </div>
     </div>
     """
