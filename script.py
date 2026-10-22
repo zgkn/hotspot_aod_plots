@@ -155,7 +155,7 @@ def rasterize_aod(lats, lons, aods):
     mask = (norm_x >= 0) & (norm_x < res) & (norm_y >= 0) & (norm_y < res)
 
     cmap = plt.get_cmap('YlGnBu')
-    colors = (cmap(np.clip(aods[mask], 0, 1.0)) * 255).astype(np.uint8)
+    colors = (cmap(np.clip(aods[mask], 0, 3.0) / 3.0) * 255).astype(np.uint8)
     colors[:, 3] = 175
     rgba[norm_y[mask], norm_x[mask]] = colors
     return rgba
@@ -365,7 +365,7 @@ def main():
         <div style="display: inline-block; width: 100%; height: 12px; background: linear-gradient(to right, #FFFFE5, #41B6C4, #081D58); border-radius: 2px; opacity: 0.8;"></div>
         <div style="width: 100%; display: flex; justify-content: space-between; padding-top: 2px; font-size: 9px; color: #aaa;">
             <span>0.0 (Clear)</span>
-            <span>1.0+ (Dense Plume)</span>
+            <span>3.0+ (Dense Plume)</span>
         </div>
     </div>
     """
