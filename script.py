@@ -147,7 +147,10 @@ def scrape_aod(sat_name, config, date_obj, label):
     return tasks
 
 # --- RASTERIZATION ENGINE ---
-def rasterize_aod(lats, lons, aods):
+def rasterize_aod(lats, lons, aods, max_aod=None):
+    if max_aod is None:
+        max_aod = np.ceil(np.max(aods))
+
     res = 500
     rgba = np.zeros((res, res, 4), dtype=np.uint8)
     norm_y = ((res-1) - ((lats - SEA_LAT[0]) / (SEA_LAT[1] - SEA_LAT[0]) * (res-1))).astype(int)
@@ -155,10 +158,10 @@ def rasterize_aod(lats, lons, aods):
     mask = (norm_x >= 0) & (norm_x < res) & (norm_y >= 0) & (norm_y < res)
 
     cmap = plt.get_cmap('turbo')
-    colors = (cmap(np.clip(aods[mask], 0, 5.0) / 5.0) * 255).astype(np.uint8)
+    colors = (cmap(np.clip(aods[mask], 0, max_aod) / max_aod) * 255).astype(np.uint8)
     colors[:, 3] = 175
     rgba[norm_y[mask], norm_x[mask]] = colors
-    return rgba
+    return rgba, max_aod
 
 # --- EXECUTION TARGET PIPELINE ---
 def main():
@@ -307,9 +310,10 @@ def main():
             print(f"[!] Processing structural fault on file {os.path.basename(path)}: {e}")
 
     aod_mapped = False
+    aod_max_scale = 5.0
     if aod_vals:
         print(f"[*] Mapping gridded AOD surface overlay: {len(aod_vals)} data arrays.")
-        img_layer = rasterize_aod(np.array(aod_lats), np.array(aod_lons), np.array(aod_vals))
+        img_layer, aod_max_scale = rasterize_aod(np.array(aod_lats), np.array(aod_lons), np.array(aod_vals))
         folium.raster_layers.ImageOverlay(
             img_layer,
             bounds=[[SEA_LAT[0], SEA_LON[0]], [SEA_LAT[1], SEA_LON[1]]],
@@ -349,7 +353,7 @@ def main():
     feature_groups["EFIRE_Yesterday_Night"].add_to(m)
     feature_groups["EFIRE_Today_Day"].add_to(m)
 
-    composite_legend = """
+    composite_legend = f"""
     <div style="position: fixed; bottom: 35px; left: 25px; width: 235px; height: 195px;
                 background-color: rgba(20, 20, 20, 0.88); color: #ffffff; z-index:9999;
                 font-size: 11px; font-family: Arial, sans-serif; border: 1px solid #444;
@@ -365,7 +369,7 @@ def main():
         <div style="display: inline-block; width: 100%; height: 12px; background: linear-gradient(to right, #440154, #3b4cc0, #1fa0d0, #5fd35f, #ffea46, #fd1d24); border-radius: 2px; opacity: 0.8;"></div>
         <div style="width: 100%; display: flex; justify-content: space-between; padding-top: 2px; font-size: 9px; color: #aaa;">
             <span>0.0 (Clear)</span>
-            <span>5.0+ (Dense Plume)</span>
+            <span>{aod_max_scale:.1f}+ (Dense Plume)</span>
         </div>
     </div>
     """
