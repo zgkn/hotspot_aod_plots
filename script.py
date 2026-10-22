@@ -155,7 +155,7 @@ def rasterize_aod(lats, lons, aods):
     mask = (norm_x >= 0) & (norm_x < res) & (norm_y >= 0) & (norm_y < res)
 
     cmap = plt.get_cmap('YlGnBu')
-    colors = (cmap(np.clip(aods[mask], 0, 3.0) / 3.0) * 255).astype(np.uint8)
+    colors = (cmap(np.power(np.clip(aods[mask], 0, 1.0), 0.5)) * 255).astype(np.uint8)
     colors[:, 3] = 175
     rgba[norm_y[mask], norm_x[mask]] = colors
     return rgba
