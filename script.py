@@ -362,7 +362,7 @@ def main():
         </div>
         <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
         <b style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">💨 Aerosol Loading (AOD Today)</b>
-        <div style="display: inline-block; width: 100%; height: 12px; background: linear-gradient(to right, #440154, #31688e, #35b779, #fde724); border-radius: 2px; opacity: 0.8;"></div>
+        <div style="display: inline-block; width: 100%; height: 12px; background: linear-gradient(to right, #440154, #3b4cc0, #1fa0d0, #5fd35f, #ffea46, #fd1d24); border-radius: 2px; opacity: 0.8;"></div>
         <div style="width: 100%; display: flex; justify-content: space-between; padding-top: 2px; font-size: 9px; color: #aaa;">
             <span>0.0 (Clear)</span>
             <span>5.0+ (Dense Plume)</span>
