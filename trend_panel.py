@@ -86,7 +86,8 @@ def _chart(rows, W, H, css_class, ymax, step, low):
         if r["date"] in low and r["count"] is not None:
             svg.append(f'<circle cx="{X(i) + bw / 2:.1f}" cy="{PT + ph + 5}" r="2" fill="#ffd60a"/>')
         tip = html.escape(_tip(r, low), quote=True)
-        svg.append(f'<rect x="{X(i):.1f}" y="{PT}" width="{bw:.1f}" height="{ph}" fill="transparent" data-tip="{tip}"><title>{tip}</title></rect>')
+        svg.append(f'<rect x="{X(i):.1f}" y="{PT}" width="{bw:.1f}" height="{ph}" fill="transparent" data-i="{i}" '
+                   f'data-date="{_label(r["date"])}" data-tip="{tip}"><title>{tip}</title></rect>')
     if n >= AVG_DAYS:                                    # trailing 7-day mean of the complete days
         pts = []
         for i in range(n):
@@ -101,6 +102,12 @@ def _chart(rows, W, H, css_class, ymax, step, low):
         anchor = "end" if cx > W - 22 else ("start" if cx < PL + 14 else "middle")      # keep the first and last label inside
         cx = min(cx, W - 1) if anchor == "end" else cx
         svg.append(f'<text x="{cx:.1f}" y="{H - 8}" text-anchor="{anchor}" font-size="9" fill="{TXT}">{_label(rows[i]["date"])}</text>')
+    svg.append(f'<line class="tp-hov" x1="0" x2="0" y1="{PT}" y2="{PT + ph}" stroke="#cccccc" stroke-width="1" stroke-dasharray="3 2" '
+               f'visibility="hidden" pointer-events="none"/>'
+               f'<line class="tp-sel" x1="0" x2="0" y1="{PT}" y2="{PT + ph}" stroke="#ffffff" stroke-width="1.6" '
+               f'visibility="hidden" pointer-events="none"/>'
+               f'<text class="tp-sel-label" x="0" y="{PT + 9}" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff" '
+               f'stroke="#141414" stroke-width="3" paint-order="stroke" visibility="hidden" pointer-events="none"></text>')
     svg.append("</svg>")
     return "".join(svg)
 
@@ -136,12 +143,35 @@ SCRIPT = """
 <script>
 (function () {
     var panel = document.getElementById('trend-panel'), read = document.getElementById('trend-read'),
-        pick = document.getElementById('trend-place'), hint = read.textContent;
+        pick = document.getElementById('trend-place'), hint = read.textContent, sel = null;      // sel: index of the day last clicked or tapped
+    function hit(e) { return e.target.closest ? e.target.closest('[data-tip]') : null; }
+    function rectOf(svg, i) { return svg.querySelector('rect[data-i="' + i + '"]'); }
+    function mark(svg, which, i) {                                  // which: 'tp-hov' (dashed guide) or 'tp-sel' (the chosen day)
+        var line = svg.querySelector('line.' + which), r = i === null ? null : rectOf(svg, i), tag = svg.querySelector('text.tp-sel-label');
+        if (!r) { line.setAttribute('visibility', 'hidden'); if (which === 'tp-sel') tag.setAttribute('visibility', 'hidden'); return; }
+        var x = +r.getAttribute('x') + +r.getAttribute('width') / 2;
+        line.setAttribute('x1', x); line.setAttribute('x2', x); line.setAttribute('visibility', 'visible');
+        if (which === 'tp-sel') {
+            var W = svg.viewBox.baseVal.width;
+            tag.textContent = r.getAttribute('data-date');
+            tag.setAttribute('x', Math.min(Math.max(x, 24), W - 24));    // keep the date inside the chart
+            tag.setAttribute('visibility', 'visible');
+        }
+    }
+    function currentTip() {                                         // the chosen day of the place on show, else the hint
+        var blk = panel.querySelector('.tp-place:not([hidden])');
+        if (sel === null || !blk) return hint;
+        var svgs = blk.querySelectorAll('svg');
+        for (var k = 0; k < svgs.length; k++) {
+            if (getComputedStyle(svgs[k]).display !== 'none') { var r = rectOf(svgs[k], sel); return r ? r.getAttribute('data-tip') : hint; }
+        }
+        return hint;
+    }
     window.showTrend = function (open, id) {
         if (id) {
             pick.value = id;
             document.querySelectorAll('.tp-place').forEach(function (b) { b.hidden = b.getAttribute('data-place') !== pick.value; });
-            read.textContent = hint;
+            read.textContent = currentTip();                        // the same day, now for this place
         }
         panel.classList.toggle('open', open);
         document.body.classList.toggle('trend-open', open);
@@ -150,12 +180,25 @@ SCRIPT = """
     pick.addEventListener('change', function () { window.showTrend(true, pick.value); });
     document.getElementById('trend-close').addEventListener('click', function () { window.showTrend(false); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') window.showTrend(false); });
-    function tip(e) {
-        var t = e.target.closest ? e.target.closest('[data-tip]') : null;
-        if (t) read.textContent = t.getAttribute('data-tip');
-    }
-    panel.addEventListener('click', tip);
-    panel.addEventListener('mouseover', tip);
+    panel.addEventListener('click', function (e) {
+        var t = hit(e);
+        if (!t) return;
+        sel = +t.getAttribute('data-i');
+        panel.querySelectorAll('svg').forEach(function (s) { mark(s, 'tp-sel', sel); });     // every chart of every place gets the line
+        read.textContent = t.getAttribute('data-tip');
+    });
+    panel.addEventListener('mouseover', function (e) {
+        var t = hit(e);
+        if (!t) return;
+        mark(t.ownerSVGElement, 'tp-hov', +t.getAttribute('data-i'));
+        read.textContent = t.getAttribute('data-tip');
+    });
+    panel.addEventListener('mouseout', function (e) {
+        var t = hit(e), to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest('[data-tip]') : null;
+        if (!t || (to && to.ownerSVGElement === t.ownerSVGElement)) return;       // still on a day of the same chart
+        mark(t.ownerSVGElement, 'tp-hov', null);
+        read.textContent = currentTip();
+    });
 })();
 </script>
 """
@@ -215,7 +258,7 @@ def trend_panel(places, left=0):
             </div>
             <button id="trend-close" type="button" aria-label="Close the hotspot chart">&times;</button>
         </div>
-        <div id="trend-read">Tap or hover a bar for that day.</div>
+        <div id="trend-read">Tap or click a day to mark it.</div>
         {blocks}
         <details style="color:#888; font-size: 9px; margin-top: 4px; line-height: 1.35;">
             <summary style="cursor: pointer;">About this chart</summary>
