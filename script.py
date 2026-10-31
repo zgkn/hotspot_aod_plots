@@ -160,6 +160,13 @@ window.addEventListener('load', function () {
         if (id) timer = setTimeout(function () { showTrend(true, id); }, 250);      // not on the first tap of a double-tap zoom
     });
     map.on('dblclick', function () { clearTimeout(timer); });
+    // layer menu on phones: the icon opens and closes it, a tap on the map closes it (the CSS hides the list while it is closed)
+    var box = document.querySelector('.leaflet-control-layers');
+    if (box) {
+        var icon = box.querySelector('.leaflet-control-layers-toggle');
+        if (icon) icon.addEventListener('click', function (e) { e.preventDefault(); box.classList.toggle('lc-open'); });
+        map.on('click', function () { box.classList.remove('lc-open'); });
+    }
 });
 """
 
@@ -239,7 +246,7 @@ def main():
         "Hotspots_Night": folium.FeatureGroup(name=f"🌌 Night hotspots ({yesterday_date} UTC)", show=True),
         "Hotspots_Day": folium.FeatureGroup(name=f"🔥 Daytime hotspots ({end_day} UTC)", show=True),
         "AOD_Today": folium.FeatureGroup(name=f"💨 Aerosol AOD ({today_date})", show=True),
-        "Area": folium.FeatureGroup(name="📐 Trend areas (click one)", show=True),
+        "Area": folium.FeatureGroup(name="Trend areas", control=False, show=True),    # always on: not in the layer menu
     }
 
     # --- Daytime fire pixels: refresh the per-day cache, newest day first ---
@@ -362,7 +369,11 @@ def main():
         #map-legend .lg-item {{ display: inline-block; margin-right: 6px; white-space: nowrap; }}
         #map-legend hr {{ margin: 4px 0 !important; }}
         body.trend-open #map-legend {{ display: none; }}
-        .leaflet-control-layers-expanded {{ max-width: 60vw; max-height: 34vh; overflow: auto; font-size: 12px; }}
+        /* the layer menu is a small icon until it is tapped (it covered a large part of the map) */
+        .leaflet-control-layers-expanded {{ max-width: 78vw; max-height: 50vh; overflow: auto; font-size: 12px; }}
+        .leaflet-control-layers-expanded .leaflet-control-layers-toggle {{ display: block !important; }}
+        .leaflet-control-layers:not(.lc-open) {{ padding: 0 !important; }}
+        .leaflet-control-layers:not(.lc-open) .leaflet-control-layers-list {{ display: none !important; }}
     }}
     </style>
     <div id="map-legend">
