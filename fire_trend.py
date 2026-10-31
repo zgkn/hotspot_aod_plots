@@ -23,6 +23,7 @@ import numpy as np
 EFIRE_PREFIX = "VIIRS_EFIRE_VIIRSI_EDR"
 SAT_ORDER = ("NOAA-21", "NOAA-20", "S-NPP")      # priority when de-duplicating (the first one keeps its pixels)
 DAY_HOURS = range(3, 9)                          # UTC start hours of the granules that hold the afternoon passes
+NIGHT_HOURS = range(15, 21)                      # UTC start hours of the night passes (map overlay only, not cached or charted)
 COMPLETE_AFTER_HOUR = 10                         # a day is complete when fetched after this UTC hour (the window is posted by then)
 DEDUPE_RADIUS_M = 500.0                          # most repeats of a fire in another pass lie within 600 m; 1 km would merge neighbours
 FIRE_MASK_KEEP = (8, 9)                          # nominal and high confidence (FP_Confidence is not filled in these files)
@@ -53,8 +54,9 @@ def day_list(end, days):
 
 
 # ---------------------------------------------------------------------------------------------------------- reading
-def read_granule(path, domain):
-    """Daytime, good-quality fire pixels inside the domain of one EFIRE granule, and how many were dropped for each reason."""
+def read_granule(path, domain, daytime=True):
+    """Day (or, with daytime=False, night), good-quality fire pixels inside the domain of one EFIRE granule, and how many were
+    dropped for each reason ('night' counts the pixels dropped by the day/night flag, whichever light was asked for)."""
     import xarray as xr
     south, west, north, east = domain
     stats = {"in_domain": 0, "night": 0, "low_conf": 0, "persistent": 0}
@@ -66,7 +68,7 @@ def read_granule(path, domain):
     lat, lon, frp = v["FP_Latitude"], v["FP_Longitude"], v["FP_FireRadiativePower"]
     ok = (lat >= south) & (lat <= north) & (lon >= west) & (lon <= east) & np.isfinite(frp) & (frp >= 0)
     stats["in_domain"] = int(ok.sum())
-    day = ok & (v["FP_Day"] == 1)
+    day = ok & (v["FP_Day"] == (1 if daytime else 0))
     stats["night"] = int(ok.sum() - day.sum())
     ok = day
     mask = v.get("FP_FireMask")
@@ -83,13 +85,13 @@ def read_granule(path, domain):
             "mask": (mask[ok] if mask is not None else np.zeros(int(ok.sum()))).astype("int8")}, stats
 
 
-def list_granules(s3, config, date):
-    """[(start time HHMMSS+tenth, key)] of the daytime window of one UTC day, in time order."""
+def list_granules(s3, config, date, hours=DAY_HOURS):
+    """[(start time HHMMSS+tenth, key)] of the window `hours` (UTC start hours) of one UTC day, in time order."""
     out = []
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=config["bucket"], Prefix=f"{EFIRE_PREFIX}/{date:%Y/%m/%d}/"):
         for obj in page.get("Contents", []):
             m = re.search(r"_s\d{8}(\d{7})", obj["Key"])
-            if m and int(m.group(1)[:2]) in DAY_HOURS:
+            if m and int(m.group(1)[:2]) in hours:
                 out.append((m.group(1), obj["Key"]))
     return sorted(out)
 
@@ -127,12 +129,14 @@ def dedupe(parts, radius_m=DEDUPE_RADIUS_M):
 
 
 # ------------------------------------------------------------------------------------------------------------ fetching
-def fetch_day(s3, sat_configs, date, domain, workers=8):
-    """Download the daytime granules of one UTC day, read them and de-duplicate. Returns (pixel arrays, meta)."""
+def fetch_day(s3, sat_configs, date, domain, workers=8, hours=DAY_HOURS, daytime=True):
+    """Download the granules of the window `hours` of one UTC day, read them and de-duplicate. Returns (pixel arrays, meta).
+
+    The cache holds the default (daytime) kind; with hours=NIGHT_HOURS, daytime=False it gives the night pixels for the map overlay."""
     jobs = []
     granules = {}
     for sat in SAT_ORDER:
-        items = list_granules(s3, sat_configs[sat], date)
+        items = list_granules(s3, sat_configs[sat], date, hours)
         granules[sat] = len(items)
         jobs += [(SAT_ORDER.index(sat), sat_configs[sat]["bucket"], key) for _, key in items]
     tmp = tempfile.mkdtemp(prefix="efire_")
@@ -144,7 +148,7 @@ def fetch_day(s3, sat_configs, date, domain, workers=8):
         try:
             s3.download_file(bucket, key, local)
             with read_lock:
-                return i, read_granule(local, domain), None
+                return i, read_granule(local, domain, daytime), None
         except Exception as e:
             return i, None, f"{os.path.basename(key)}: {e}"
         finally:

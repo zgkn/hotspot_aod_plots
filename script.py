@@ -104,6 +104,26 @@ def rasterize_aod(lats, lons, aods, max_aod=None):
     rgba[norm_y[mask], norm_x[mask]] = colors
     return rgba, max_aod
 
+# --- HOTSPOT MARKERS ---
+def draw_hotspots(fires, group):
+    """One circle marker per unique fire pixel, coloured and sized by its FRP. Markers do not pass their clicks on to the map."""
+    for lat, lon, p, sat in zip(fires["lat"], fires["lon"], fires["frp"], fires["sat"]):
+        color = '#FFD700' if p < 10 else ('#FF8C00' if p < 50 else '#FF4500')
+        popup_html = (f"<b>🛰️ {fire_trend.SAT_ORDER[int(sat)]}</b><br>Lat: {lat:.3f}<br>Lon: {lon:.3f}"
+                      f"<br>FRP: <b>{p:.1f} MW</b>")
+        folium.CircleMarker(
+            location=[float(lat), float(lon)],
+            radius=float(np.clip(p / 6.0, 6, 14)),
+            color=color,
+            weight=2,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.85,
+            bubbling_mouse_events=False,
+            popup=folium.Popup(popup_html, max_width=150)
+        ).add_to(group)
+    return len(fires["lat"])
+
 # --- OPEN THE TREND CHART WHEN THE AREA IS CLICKED ---
 AREA_CLICK_JS = """
 window.addEventListener('load', function () {
@@ -165,6 +185,7 @@ def main():
     local_now = datetime.datetime.now(sgt_tz)
 
     today_date = local_now.date()
+    yesterday_date = today_date - datetime.timedelta(days=1)
 
     # IMPORTANT: Create output directory for GitHub Artifacts
     os.makedirs("output", exist_ok=True)
@@ -206,6 +227,7 @@ def main():
     ).add_to(m)
 
     feature_groups = {
+        "Hotspots_Night": folium.FeatureGroup(name=f"🌌 Night hotspots ({yesterday_date} UTC)", show=True),
         "Hotspots_Day": folium.FeatureGroup(name=f"🔥 Daytime hotspots ({end_day} UTC)", show=True),
         "AOD_Today": folium.FeatureGroup(name=f"💨 Aerosol AOD ({today_date})", show=True),
         "Area": folium.FeatureGroup(name=f"📐 Trend area: {area.name}", show=True),
@@ -271,27 +293,18 @@ def main():
             interactive=False
         ).add_to(feature_groups["AOD_Today"])
 
-    # --- Daytime hotspots of the latest day, from the cache (de-duplicated) ---
-    hotspots_plotted = 0
+    # --- Hotspot markers: the latest day (from the cache) and the night before (fetched now, map only) ---
     latest = fire_trend.load_day(CACHE_DIR, end_day)
-    if latest is not None:
-        for lat, lon, p, sat in zip(latest["lat"], latest["lon"], latest["frp"], latest["sat"]):
-            color = '#FFD700' if p < 10 else ('#FF8C00' if p < 50 else '#FF4500')
-            popup_html = (f"<b>🛰️ {fire_trend.SAT_ORDER[int(sat)]}</b><br>Lat: {lat:.3f}<br>Lon: {lon:.3f}"
-                          f"<br>FRP: <b>{p:.1f} MW</b>")
-            folium.CircleMarker(
-                location=[float(lat), float(lon)],
-                radius=float(np.clip(p / 6.0, 6, 14)),
-                color=color,
-                weight=2,
-                fill=True,
-                fill_color=color,
-                fill_opacity=0.85,
-                bubbling_mouse_events=False,
-                popup=folium.Popup(popup_html, max_width=150)
-            ).add_to(feature_groups["Hotspots_Day"])
-            hotspots_plotted += 1
-    print(f"[*] Hotspot markers drawn for {end_day}: {hotspots_plotted}")
+    day_drawn = draw_hotspots(latest, feature_groups["Hotspots_Day"]) if latest is not None else 0
+    print(f"[*] Daytime hotspot markers drawn for {end_day}: {day_drawn}")
+    night_drawn = 0
+    try:
+        night, _ = fire_trend.fetch_day(s3_client, SATELLITE_CONFIGS, yesterday_date, domain, workers=12,
+                                        hours=fire_trend.NIGHT_HOURS, daytime=False)
+        night_drawn = draw_hotspots(night, feature_groups["Hotspots_Night"])
+    except Exception as e:
+        print(f"[!] Night hotspots for {yesterday_date} unavailable: {e}")
+    print(f"[*] Night hotspot markers drawn for {yesterday_date}: {night_drawn}")
 
     # --- Trend of daily unique daytime hotspots in the chosen area ---
     rows = fire_trend.build_series(CACHE_DIR, dates, area)
@@ -312,6 +325,7 @@ def main():
     # Layer stacking
     feature_groups["AOD_Today"].add_to(m)
     feature_groups["Area"].add_to(m)
+    feature_groups["Hotspots_Night"].add_to(m)
     feature_groups["Hotspots_Day"].add_to(m)
 
     composite_legend = f"""
