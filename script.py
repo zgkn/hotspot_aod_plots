@@ -127,7 +127,8 @@ def draw_hotspots(fires, group):
 # --- OPEN THE TREND CHART WHEN THE AREA IS CLICKED ---
 AREA_CLICK_JS = """
 window.addEventListener('load', function () {
-    var map = %s, polys = %s, timer = null;
+    var map = %s, places = %s, layers = %s, timer = null;
+    var NORMAL = {weight: 1.6, fillOpacity: 0.08}, CHOSEN = {weight: 3, fillOpacity: 0.25};
     function inRing(x, y, ring) {
         var inside = false;
         for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -136,19 +137,27 @@ window.addEventListener('load', function () {
         }
         return inside;
     }
-    function inArea(lat, lng) {                  // even-odd over the outline and its holes
-        return polys.some(function (rings) {
+    function inPlace(p, lat, lng) {              // even-odd over the outline and its holes
+        return p.polys.some(function (rings) {
             return rings.filter(function (r) { return inRing(lng, lat, r); }).length %% 2 === 1;
         });
     }
+    function placeAt(latlng) {                   // the point itself first, then a few pixels around it (a phone moves a tap)
+        var c = map.latLngToContainerPoint(latlng), tol = 12;
+        var spots = [[0, 0], [tol, 0], [-tol, 0], [0, tol], [0, -tol]];
+        for (var s = 0; s < spots.length; s++) {
+            var ll = map.containerPointToLatLng([c.x + spots[s][0], c.y + spots[s][1]]);
+            for (var k = 0; k < places.length; k++) if (inPlace(places[k], ll.lat, ll.lng)) return places[k].id;
+        }
+        return null;
+    }
+    window.onTrendPlace = function (chosen) {    // the place shown in the panel is drawn heavier, as in model_forecast
+        Object.keys(layers).forEach(function (id) { layers[id].setStyle(id === chosen ? CHOSEN : NORMAL); });
+    };
     map.on('click', function (e) {
-        var p = map.latLngToContainerPoint(e.latlng), tol = 12;
-        var hit = [[0, 0], [tol, 0], [-tol, 0], [0, tol], [0, -tol]].some(function (o) {
-            var ll = map.containerPointToLatLng([p.x + o[0], p.y + o[1]]);
-            return inArea(ll.lat, ll.lng);
-        });
+        var id = placeAt(e.latlng);
         clearTimeout(timer);
-        if (hit) timer = setTimeout(function () { showTrend(true); }, 250);     // not on the first tap of a double-tap zoom
+        if (id) timer = setTimeout(function () { showTrend(true, id); }, 250);      // not on the first tap of a double-tap zoom
     });
     map.on('dblclick', function () { clearTimeout(timer); });
 });
@@ -195,12 +204,12 @@ def main():
     domain = (SEA_LAT[0], SEA_LON[0], SEA_LAT[1], SEA_LON[1])
     days, area_text = get_selection()
     try:
-        area = fire_trend.parse_area(area_text, domain)
+        areas = fire_trend.parse_areas(area_text, domain)
     except ValueError as e:
         raise SystemExit(f"[X] {e}")
     end_day = fire_trend.latest_day()
     dates = fire_trend.day_list(end_day, days)
-    print(f"[*] Hotspot trend: {days} days up to {end_day} (UTC) | area: {area.name}")
+    print(f"[*] Hotspot trend: {days} days up to {end_day} (UTC) | areas: {', '.join(a.name for a in areas)}")
 
     m = folium.Map(location=[8.5, 116.0], zoom_start=5, tiles=None)
 
@@ -230,7 +239,7 @@ def main():
         "Hotspots_Night": folium.FeatureGroup(name=f"🌌 Night hotspots ({yesterday_date} UTC)", show=True),
         "Hotspots_Day": folium.FeatureGroup(name=f"🔥 Daytime hotspots ({end_day} UTC)", show=True),
         "AOD_Today": folium.FeatureGroup(name=f"💨 Aerosol AOD ({today_date})", show=True),
-        "Area": folium.FeatureGroup(name=f"📐 Trend area: {area.name}", show=True),
+        "Area": folium.FeatureGroup(name="📐 Trend areas (click one)", show=True),
     }
 
     # --- Daytime fire pixels: refresh the per-day cache, newest day first ---
@@ -306,21 +315,32 @@ def main():
         print(f"[!] Night hotspots for {yesterday_date} unavailable: {e}")
     print(f"[*] Night hotspot markers drawn for {yesterday_date}: {night_drawn}")
 
-    # --- Trend of daily unique daytime hotspots in the chosen area ---
-    rows = fire_trend.build_series(CACHE_DIR, dates, area)
-    print(f"\n[*] Daily unique daytime hotspots in {area.name}:")
-    for r in rows:
-        state = "no data" if r["count"] is None else ("complete" if r["complete"] else "partial")
-        print(f"    {r['date']}  {'-' if r['count'] is None else r['count']:>6}  {state}  granules={r['granules']}")
-    m.get_root().html.add_child(folium.Element(trend_panel(rows, area.name, left=len(left))))
-    # a click or tap inside the outlined area opens the chart (the panel is hidden until then). The map itself checks whether the
-    # point is in the area, with a few pixels of tolerance: a phone moves a tap to the nearest line or marker, so listening on the
-    # outline alone misses taps near borders. Markers do not pass their clicks on, so tapping a hotspot only shows its popup.
-    folium.GeoJson(
-        area.geojson(),
-        style_function=lambda x: {"color": "#4dd0e1", "weight": 2.5, "fillOpacity": 0.04, "dashArray": "6 4"},
-    ).add_to(feature_groups["Area"])
-    m.get_root().script.add_child(folium.Element(AREA_CLICK_JS % (m.get_name(), json.dumps(area.polygons()))))
+    # --- Trend of daily unique daytime hotspots in the chosen places ---
+    series = fire_trend.build_series(CACHE_DIR, dates, areas)
+    print(f"\n[*] Daily unique daytime hotspots (one column per place):")
+    print("    date        " + " ".join(f"{a.name[:12]:>12}" for a in areas) + "  state")
+    for i, d in enumerate(dates):
+        first = series[areas[0].id][i]
+        cells = " ".join(f"{'-' if series[a.id][i]['count'] is None else series[a.id][i]['count']:>12}" for a in areas)
+        state = "no data" if first["count"] is None else ("complete" if first["complete"] else "partial")
+        print(f"    {d}  {cells}  {state}  granules={first['granules']}")
+    places = [{"id": a.id, "name": a.name, "group": a.group, "rows": series[a.id]} for a in areas]
+    m.get_root().html.add_child(folium.Element(trend_panel(places, left=len(left))))
+    # Every place is outlined (a white casing under a dark line, as in model_forecast) and a click or tap inside one opens its chart;
+    # the panel is hidden until then. The map itself checks which place the point is in, with a few pixels of tolerance: a phone
+    # moves a tap to the nearest line or marker, so listening on the outlines alone misses taps near borders. Markers do not pass
+    # their clicks on, so tapping a hotspot only shows its popup.
+    layer_names = {}
+    for a in areas:
+        folium.GeoJson(a.geojson(), style_function=lambda x: {"color": "#ffffff", "weight": 4.5, "opacity": 0.85, "fill": False}
+                       ).add_to(feature_groups["Area"])
+    for a in areas:
+        layer = folium.GeoJson(a.geojson(), style_function=lambda x: {"color": "#1a1a19", "weight": 1.6, "fillColor": "#ffffff", "fillOpacity": 0.08})
+        layer.add_to(feature_groups["Area"])
+        layer_names[a.id] = layer.get_name()
+    layers_js = "{" + ", ".join(f"{json.dumps(i)}: {v}" for i, v in layer_names.items()) + "}"
+    places_js = json.dumps([{"id": a.id, "polys": a.polygons()} for a in areas])
+    m.get_root().script.add_child(folium.Element(AREA_CLICK_JS % (m.get_name(), places_js, layers_js)))
 
     # Layer stacking
     feature_groups["AOD_Today"].add_to(m)
@@ -360,7 +380,7 @@ def main():
             <span>{aod_max_scale:.1f}+ (Dense Plume)</span>
         </div>
         <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
-        <div style="font-size: 9px; color: #4dd0e1;">Click or tap the dashed outline for the hotspot chart</div>
+        <div style="font-size: 9px; color: #4dd0e1;">Click or tap an outlined area for its hotspot chart</div>
     </div>
     """
     m.get_root().html.add_child(folium.Element(composite_legend))

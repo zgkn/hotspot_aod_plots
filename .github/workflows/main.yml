@@ -12,7 +12,7 @@ on:
         required: false
         default: ""
       area:
-        description: "all | a place name (Riau, Jambi, South Sumatra, West/Central/South Kalimantan, Cambodia, Singapore, ...; join several with |) | a box south,west,north,east (blank = keep the last choice)"
+        description: "Places, each with its own chart, separated by |: Riau, Jambi, South Sumatra, West/Central/South Kalimantan, Cambodia, Singapore, ... (join with + for one combined place), all, or a box south,west,north,east (blank = keep the last choice)"
         required: false
         default: ""
 

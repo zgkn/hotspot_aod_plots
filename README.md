@@ -6,18 +6,21 @@ over the past days. Built by `.github/workflows/main.yml` (three times a day and
 
 ## Reading the page
 
-The trend chart is hidden until you click (or tap) inside the dashed outline of the chosen area; the x closes it. On a phone it
-opens as a bottom sheet and the legend steps aside while it is open; tap a bar to read that day. Tapping a hotspot dot shows its
-popup and does not open the chart.
+Every chosen place is outlined on the map (a white casing under a dark line, as in the `model_forecast` viewer). Click or tap
+inside one and its daily chart opens (hidden until then); the place menu in the panel switches between the places, the chosen place
+is drawn heavier, and the x closes the panel. On a phone the panel is a bottom sheet and the legend steps aside while it is open;
+tap a bar to read that day. Tapping a hotspot dot shows its popup and does not open the chart. Each place has its own scale.
 
-## Choosing the days and the area
+## Choosing the days and the places
 
 Run the workflow by hand (Actions > Generate Hotspots Map > Run workflow) and fill in:
 
 | input | meaning |
 |---|---|
 | `days` | 1-90 days counted back from the latest daytime day (UTC) |
-| `area` | `all`; a place name (`Riau`, `Jambi`, `South Sumatra`, `West Kalimantan`, `Central Kalimantan`, `South Kalimantan`, `Cambodia`, `Kota Tinggi (Johor)`, `Mersing (Johor)`, `Singapore`), several joined with `|`; or a box `south,west,north,east` such as `-3,100,2,106` |
+| `area` | the places, separated by `\|`, each with its own chart: `Riau`, `Jambi`, `South Sumatra`, `West Kalimantan`, `Central Kalimantan`, `South Kalimantan`, `Cambodia`, `Kota Tinggi (Johor)`, `Mersing (Johor)`, `Singapore`, `all`, or a box `south,west,north,east` such as `-3,100,2,106`. Names joined with `+` make one combined place (`Riau+Jambi`). |
+
+Example: `Central Kalimantan|West Kalimantan|South Kalimantan|Jambi|South Sumatra|Riau`.
 
 Leave an input blank to keep the last choice (the scheduled runs use it too). The choice is remembered only when the run is on the
 default branch. A new place name is one entry in `regions.geojson`; any other place can be given as a box.

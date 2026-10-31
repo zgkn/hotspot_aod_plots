@@ -252,8 +252,9 @@ def refresh(cache_dir, dates, s3, sat_configs, domain, budget_s=3600, workers=8)
 class Area:
     """A named place: whole domain, a box or provinces/countries/districts from regions.geojson."""
 
-    def __init__(self, name, kind, geometry, box):
-        self.name, self.kind, self.geometry, self.box = name, kind, geometry, box     # box: south, west, north, east
+    def __init__(self, name, kind, geometry, box, group="Areas"):
+        self.name, self.kind, self.geometry, self.box, self.group = name, kind, geometry, box, group     # box: south, west, north, east
+        self.id = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "area"
         import shapely
         shapely.prepare(geometry)
 
@@ -280,7 +281,7 @@ class Area:
 def _box_area(box, name, kind="box"):
     from shapely.geometry import box as sbox
     south, west, north, east = box
-    return Area(name, kind, sbox(west, south, east, north), box)
+    return Area(name, kind, sbox(west, south, east, north), box, "Domain" if kind == "domain" else "Boxes")
 
 
 def _fmt_deg(v, pos, neg):
@@ -288,25 +289,26 @@ def _fmt_deg(v, pos, neg):
 
 
 def regions(path=REGIONS_FILE):
-    """{name: shapely geometry} of the places in regions.geojson plus the built-in boxes."""
+    """{name: (shapely geometry, menu group)} of the places in regions.geojson plus the built-in boxes."""
     import shapely
     from shapely.geometry import shape, box as sbox
     out = {}
     if Path(path).exists():
         for f in json.loads(Path(path).read_text())["features"]:
-            out[f["properties"]["name"]] = shapely.make_valid(shape(f["geometry"]))     # simplified outlines can self-touch
-    for name, (s, w, n, e) in BOXES.items():
-        out[name] = sbox(w, s, e, n)
+            # simplified outlines can self-touch
+            out[f["properties"]["name"]] = (shapely.make_valid(shape(f["geometry"])), f["properties"].get("group", "Provinces"))
+    for name, (s_, w, n, e) in BOXES.items():
+        out[name] = (sbox(w, s_, e, n), "Boxes")
     return out
 
 
 def parse_area(text, domain, path=REGIONS_FILE):
-    """'all', a box 'south,west,north,east', or place names from regions.geojson joined with '|'."""
+    """One place: 'all', a box 'south,west,north,east', a name from regions.geojson, or names joined with '+' (one combined place)."""
     from shapely.ops import unary_union
     t = (text or "").strip()
     if t.lower() in ("", "all", "domain", "whole domain"):
         return _box_area(domain, "Whole domain", "domain")
-    parts = [p for p in re.split(r"[,\s;]+", t) if p]
+    parts = [p for p in re.split(r"[,\s]+", t) if p]
     try:
         nums = [float(p) for p in parts]
     except ValueError:
@@ -325,7 +327,7 @@ def parse_area(text, domain, path=REGIONS_FILE):
     known = regions(path)
     lower = {k.lower(): k for k in known}
     chosen = []
-    for want in [w.strip() for w in re.split(r"[|;]", t) if w.strip()]:
+    for want in [w.strip() for w in t.split("+") if w.strip()]:
         hit = lower.get(want.lower())
         if hit is None:
             close = [k for k in known if want.lower() in k.lower()]
@@ -334,20 +336,34 @@ def parse_area(text, domain, path=REGIONS_FILE):
         if hit is None:
             raise ValueError(f"Unknown area {want!r}. Use 'all', a box 'south,west,north,east' or one of: {', '.join(sorted(known))}")
         chosen.append(hit)
-    geom = unary_union([known[k] for k in chosen])
+    geom = unary_union([known[k][0] for k in chosen])
     w, s, e, n = geom.bounds
-    return Area(" + ".join(chosen), "region", geom, (s, w, n, e))
+    group = known[chosen[0]][1] if len(chosen) == 1 else "Combined"
+    return Area(" + ".join(chosen), "region", geom, (s, w, n, e), group)
+
+
+def parse_areas(text, domain, path=REGIONS_FILE):
+    """Several places separated by '|' (or ';' or a new line); each gets its own series. Returns [Area]."""
+    items = [x.strip() for x in re.split(r"[|;\n]+", text or "") if x.strip()] or ["all"]
+    areas, seen = [], set()
+    for item in items:
+        area = parse_area(item, domain, path)
+        if area.name not in seen:
+            seen.add(area.name)
+            areas.append(area)
+    return areas
 
 
 # ------------------------------------------------------------------------------------------------------------ series
-def build_series(cache_dir, dates, area):
-    """One row per day: date, count (None when the day is not in the cache), complete flag and the granule counts."""
-    rows = []
+def build_series(cache_dir, dates, areas):
+    """{area id: rows}; one row per day: date, count (None when the day is not in the cache), complete flag and the granule counts."""
+    out = {a.id: [] for a in areas}
     for d in dates:
-        day = load_day(cache_dir, d)
-        if day is None:
-            rows.append({"date": d, "count": None, "complete": False, "granules": {}, "unique_all": None})
-        else:
-            rows.append({"date": d, "count": area.count(day["lat"], day["lon"]), "complete": day["complete"],
-                         "granules": day["meta"]["granules"], "unique_all": day["meta"]["unique"]})
-    return rows
+        day = load_day(cache_dir, d)                         # every day file is read once for all the areas
+        for a in areas:
+            if day is None:
+                out[a.id].append({"date": d, "count": None, "complete": False, "granules": {}, "unique_all": None})
+            else:
+                out[a.id].append({"date": d, "count": a.count(day["lat"], day["lon"]), "complete": day["complete"],
+                                  "granules": day["meta"]["granules"], "unique_all": day["meta"]["unique"]})
+    return out
