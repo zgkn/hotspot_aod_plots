@@ -264,6 +264,14 @@ class Area:
         from shapely.geometry import mapping
         return {"type": "Feature", "properties": {"name": self.name}, "geometry": mapping(self.geometry)}
 
+    def polygons(self):
+        """[[ring, ...], ...] with ring = [[lon, lat], ...] (the first ring of a polygon is its outline, the others are holes)."""
+        def flat(g):
+            if g.geom_type == "Polygon":
+                return [g]
+            return [p for part in getattr(g, "geoms", []) for p in flat(part)]
+        return [[[[round(x, 4), round(y, 4)] for x, y in ring.coords] for ring in [p.exterior, *p.interiors]] for p in flat(self.geometry)]
+
 
 def _box_area(box, name, kind="box"):
     from shapely.geometry import box as sbox

@@ -4,6 +4,12 @@ Map of Southeast Asia (90-142E, 11S-28N) with the day's **aerosol optical depth*
 the **daytime fire hotspots** of the latest day, and a **trend panel** with the daily number of daytime hotspots in an area
 over the past days. Built by `.github/workflows/main.yml` (three times a day and on demand) and published to GitHub Pages.
 
+## Reading the page
+
+The trend chart is hidden until you click (or tap) inside the dashed outline of the chosen area; the x closes it. On a phone it
+opens as a bottom sheet and the legend steps aside while it is open; tap a bar to read that day. Tapping a hotspot dot shows its
+popup and does not open the chart.
+
 ## Choosing the days and the area
 
 Run the workflow by hand (Actions > Generate Hotspots Map > Run workflow) and fill in:

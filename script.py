@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 import folium
 
 import fire_trend
-from trend_panel import trend_panel
+from trend_panel import trend_panel, PHONE_MAX_WIDTH
 
 # --- SHARED DOMAIN CONFIGURATIONS ---
 SEA_LAT = [-11.0, 28.0]
@@ -103,6 +103,36 @@ def rasterize_aod(lats, lons, aods, max_aod=None):
     colors[:, 3] = 175
     rgba[norm_y[mask], norm_x[mask]] = colors
     return rgba, max_aod
+
+# --- OPEN THE TREND CHART WHEN THE AREA IS CLICKED ---
+AREA_CLICK_JS = """
+window.addEventListener('load', function () {
+    var map = %s, polys = %s, timer = null;
+    function inRing(x, y, ring) {
+        var inside = false;
+        for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            var xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+            if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+        }
+        return inside;
+    }
+    function inArea(lat, lng) {                  // even-odd over the outline and its holes
+        return polys.some(function (rings) {
+            return rings.filter(function (r) { return inRing(lng, lat, r); }).length %% 2 === 1;
+        });
+    }
+    map.on('click', function (e) {
+        var p = map.latLngToContainerPoint(e.latlng), tol = 12;
+        var hit = [[0, 0], [tol, 0], [-tol, 0], [0, tol], [0, -tol]].some(function (o) {
+            var ll = map.containerPointToLatLng([p.x + o[0], p.y + o[1]]);
+            return inArea(ll.lat, ll.lng);
+        });
+        clearTimeout(timer);
+        if (hit) timer = setTimeout(function () { showTrend(true); }, 250);     // not on the first tap of a double-tap zoom
+    });
+    map.on('dblclick', function () { clearTimeout(timer); });
+});
+"""
 
 # --- DAYS AND AREA OF THE TREND ---
 def get_selection():
@@ -257,6 +287,7 @@ def main():
                 fill=True,
                 fill_color=color,
                 fill_opacity=0.85,
+                bubbling_mouse_events=False,
                 popup=folium.Popup(popup_html, max_width=150)
             ).add_to(feature_groups["Hotspots_Day"])
             hotspots_plotted += 1
@@ -269,11 +300,14 @@ def main():
         state = "no data" if r["count"] is None else ("complete" if r["complete"] else "partial")
         print(f"    {r['date']}  {'-' if r['count'] is None else r['count']:>6}  {state}  granules={r['granules']}")
     m.get_root().html.add_child(folium.Element(trend_panel(rows, area.name, left=len(left))))
-    if area.kind != "domain":
-        folium.GeoJson(
-            area.geojson(),
-            style_function=lambda x: {"color": "#4dd0e1", "weight": 2.5, "fillOpacity": 0.04, "dashArray": "6 4"},
-        ).add_to(feature_groups["Area"])
+    # a click or tap inside the outlined area opens the chart (the panel is hidden until then). The map itself checks whether the
+    # point is in the area, with a few pixels of tolerance: a phone moves a tap to the nearest line or marker, so listening on the
+    # outline alone misses taps near borders. Markers do not pass their clicks on, so tapping a hotspot only shows its popup.
+    folium.GeoJson(
+        area.geojson(),
+        style_function=lambda x: {"color": "#4dd0e1", "weight": 2.5, "fillOpacity": 0.04, "dashArray": "6 4"},
+    ).add_to(feature_groups["Area"])
+    m.get_root().script.add_child(folium.Element(AREA_CLICK_JS % (m.get_name(), json.dumps(area.polygons()))))
 
     # Layer stacking
     feature_groups["AOD_Today"].add_to(m)
@@ -281,23 +315,38 @@ def main():
     feature_groups["Hotspots_Day"].add_to(m)
 
     composite_legend = f"""
-    <div style="position: fixed; bottom: 35px; left: 25px; width: 235px; height: 195px;
-                background-color: rgba(20, 20, 20, 0.88); color: #ffffff; z-index:9999;
+    <style>
+    #map-legend {{ position: fixed; bottom: 35px; left: 25px; width: 235px; box-sizing: border-box;
+                background-color: rgba(20, 20, 20, 0.88); color: #ffffff; z-index: 9999;
                 font-size: 11px; font-family: Arial, sans-serif; border: 1px solid #444;
-                padding: 12px; border-radius: 6px; box-shadow: 0 0 15px rgba(0,0,0,0.6);">
-        <b style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">🔥 Fire Intensity (FRP)</b>
-        <div style="line-height: 16px; margin-bottom: 8px;">
-            <span style="display: inline-block; width: 6px; height: 6px; background: #FFD700; border-radius: 50%; margin-right: 5px;"></span> Low (&lt;10 MW)<br>
-            <span style="display: inline-block; width: 10px; height: 10px; background: #FF8C00; border-radius: 50%; margin-right: 5px;"></span> Mid (10-50 MW)<br>
-            <span style="display: inline-block; width: 14px; height: 14px; background: #FF4500; border-radius: 50%; margin-right: 5px;"></span> High (&gt;50 MW)
+                padding: 12px; border-radius: 6px; box-shadow: 0 0 15px rgba(0,0,0,0.6); }}
+    @media (max-width: {PHONE_MAX_WIDTH}px) {{
+        #map-legend {{ left: 8px; bottom: max(8px, env(safe-area-inset-bottom)); width: 188px; padding: 7px 9px; font-size: 10px; }}
+        #map-legend .lg-title {{ font-size: 11px !important; margin-bottom: 3px !important; }}
+        #map-legend .lg-frp {{ line-height: 14px !important; margin-bottom: 4px !important; }}
+        #map-legend .lg-frp br {{ display: none; }}
+        #map-legend .lg-item {{ display: inline-block; margin-right: 6px; white-space: nowrap; }}
+        #map-legend hr {{ margin: 4px 0 !important; }}
+        body.trend-open #map-legend {{ display: none; }}
+        .leaflet-control-layers-expanded {{ max-width: 60vw; max-height: 34vh; overflow: auto; font-size: 12px; }}
+    }}
+    </style>
+    <div id="map-legend">
+        <b class="lg-title" style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">🔥 Fire Intensity (FRP)</b>
+        <div class="lg-frp" style="line-height: 16px; margin-bottom: 8px;">
+            <span class="lg-item"><span style="display: inline-block; width: 6px; height: 6px; background: #FFD700; border-radius: 50%; margin-right: 5px;"></span> Low (&lt;10 MW)</span><br>
+            <span class="lg-item"><span style="display: inline-block; width: 10px; height: 10px; background: #FF8C00; border-radius: 50%; margin-right: 5px;"></span> Mid (10-50 MW)</span><br>
+            <span class="lg-item"><span style="display: inline-block; width: 14px; height: 14px; background: #FF4500; border-radius: 50%; margin-right: 5px;"></span> High (&gt;50 MW)</span>
         </div>
         <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
-        <b style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">💨 Aerosol Loading (AOD Today)</b>
+        <b class="lg-title" style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">💨 Aerosol Loading (AOD Today)</b>
         <div style="display: inline-block; width: 100%; height: 12px; background: linear-gradient(to right, #440154, #3b4cc0, #1fa0d0, #5fd35f, #ffea46, #fd1d24); border-radius: 2px; opacity: 0.8;"></div>
         <div style="width: 100%; display: flex; justify-content: space-between; padding-top: 2px; font-size: 9px; color: #aaa;">
             <span>0.0 (Clear)</span>
             <span>{aod_max_scale:.1f}+ (Dense Plume)</span>
         </div>
+        <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
+        <div style="font-size: 9px; color: #4dd0e1;">Click or tap the dashed outline for the hotspot chart</div>
     </div>
     """
     m.get_root().html.add_child(folium.Element(composite_legend))
