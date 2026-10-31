@@ -9,7 +9,11 @@ over the past days. Built by `.github/workflows/main.yml` (three times a day and
 Every chosen place is outlined on the map (a white casing under a dark line, as in the `model_forecast` viewer). Click or tap
 inside one and its daily chart opens (hidden until then); the place menu in the panel switches between the places, the chosen place
 is drawn heavier, and the x closes the panel. On a phone the panel is a bottom sheet and the legend steps aside while it is open;
-tap a day to mark it: a solid line with its date appears on the chart, the read-out line gives its count, and the same day stays marked when you switch place (on a wide screen a dashed guide also follows the mouse). Tapping a hotspot dot shows its popup and does not open the chart. Each place has its own scale.
+press and drag along the chart (mouse or finger) to move the chosen day: a line with its date follows the pointer and the read-out gives
+that day's count; the same day stays marked when you switch place (on a wide screen a dashed guide also follows the mouse). Zoom in
+time with the wheel or a pinch, or jump with the 7 d / 14 d / 30 d / All buttons; scroll with Shift+wheel, two fingers, or the strip under
+the chart (drag its window to scroll, drag the window's edges to zoom, tap outside it to move it there); with the chart focused, the arrow
+keys move the chosen day. The time window is shared by all places. Tapping a hotspot dot shows its popup and does not open the chart. Each place has its own scale.
 The outlines are a permanent layer (not in the layer menu). On a phone the layer menu is a small icon: tap it to open the list, tap the
 map to close it; on a wide screen it stays open.
 
