@@ -6,15 +6,33 @@ on:
     - cron: '33 19 * * *'
     - cron: '3 8 * * *'
   workflow_dispatch:      # Manual trigger button
+    inputs:
+      days:
+        description: "Days of daytime hotspot counts to chart, 1-90 (blank = keep the last choice, first time 14)"
+        required: false
+        default: ""
+      area:
+        description: "all | a place name (Riau, Jambi, South Sumatra, West/Central/South Kalimantan, Cambodia, Singapore, ...; join several with |) | a box south,west,north,east (blank = keep the last choice)"
+        required: false
+        default: ""
 
 permissions:
-  contents: read
+  contents: write         # the `data` branch keeps the per-day hotspot cache
   pages: write
   id-token: write
+
+# one run at a time: they share the `data` branch
+concurrency:
+  group: hotspots-aod
+  cancel-in-progress: false
+
+env:
+  IS_DEFAULT: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
 jobs:
   generate_map:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,20 +46,63 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
 
       - name: Install Python dependencies
-        run: pip install boto3 xarray netcdf4 h5netcdf folium matplotlib requests
+        run: pip install boto3 xarray netcdf4 h5netcdf folium matplotlib scipy shapely
+
+      # The `data` branch holds one small file per UTC day with the daytime fire pixels (a single force-pushed commit),
+      # so a run only downloads the days that are missing or were fetched before their passes were all posted.
+      - name: Load the hotspot cache
+        run: |
+          mkdir cache && cd cache
+          git init -q
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git fetch -q --depth 1 origin data; then git checkout -q -B data FETCH_HEAD; fi
+          ls | head -5; ls | wc -l
 
       - name: Run script
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
+          HOTSPOT_DAYS: ${{ github.event.inputs.days }}
+          HOTSPOT_AREA: ${{ github.event.inputs.area }}
+          # only the default branch remembers the choice, so a test run on another branch does not change the scheduled page
+          HOTSPOT_SAVE_SELECTION: ${{ env.IS_DEFAULT }}
+          HOTSPOT_BUDGET_MIN: "75"
         run: python script.py
+
+      - name: Update the data branch
+        # also after a failed run: the days that were fetched are kept for the next one
+        if: ${{ !cancelled() }}
+        working-directory: cache
+        run: |
+          printf '%s\n' "Daytime VIIRS fire pixels per UTC day used by the hotspot trend." \
+            "Automatically force-pushed by the workflow; one file per day, the last 100 days." > README.md
+          git add -A
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -q --orphan latest
+            git add -A
+            git commit -q -m "Hotspot cache: $(ls fires_*.npz | wc -l) days"
+            git push -q --force origin latest:data
+          else
+            echo "data branch already up to date"
+          fi
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: output/
 
+      # Other branches only prove the build; keep the page for a look
+      - name: Keep the page of a test run
+        if: ${{ env.IS_DEFAULT != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-page
+          path: output/
+          retention-days: 3
+
   deploy_pages:
+    # only the default branch publishes, so a test run on a branch never replaces the live page
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     needs: generate_map
     runs-on: ubuntu-latest
     environment:

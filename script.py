@@ -3,6 +3,7 @@ import sys
 import datetime
 import re
 import gc
+import json
 import subprocess
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,62 +13,23 @@ logging.getLogger("urllib3").setLevel(logging.ERROR)
 
 def install_deps():
     try:
-        import boto3, xarray, netCDF4, folium, matplotlib, requests
+        import boto3, xarray, netCDF4, folium, matplotlib, scipy, shapely
     except ImportError:
         print("[*] Installing missing dependencies...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
-                               "boto3", "xarray", "netcdf4", "h5netcdf", "folium", "matplotlib", "requests"])
+                               "boto3", "xarray", "netcdf4", "h5netcdf", "folium", "matplotlib", "scipy", "shapely"])
 install_deps()
 
 import numpy as np
 import xarray as xr
 import boto3
-import requests
 from botocore import UNSIGNED
 from botocore.config import Config
 import matplotlib.pyplot as plt
 import folium
-from folium.plugins import HeatMap
 
-# --- TELEGRAM CONFIGURATIONS ---
-# Token is pulled from GitHub Secrets for security
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-
-def send_telegram_message(text: str) -> bool:
-    if not BOT_TOKEN:
-        print("[-] TELEGRAM_BOT_TOKEN not found. Skipping Telegram message.")
-        return False
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        return True
-    except Exception as e:
-        print(f"Failed to send message: {e}")
-        return False
-
-def send_telegram_file(file_path: str, caption: str = None) -> bool:
-    if not BOT_TOKEN:
-        print("[-] TELEGRAM_BOT_TOKEN not found. Skipping Telegram file upload.")
-        return False
-    if not os.path.exists(file_path):
-        return False
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-    payload = {"chat_id": CHAT_ID}
-    if caption:
-        payload["caption"] = caption
-        payload["parse_mode"] = "Markdown"
-    try:
-        with open(file_path, 'rb') as file:
-            files = {'document': file}
-            response = requests.post(url, data=payload, files=files, timeout=30)
-            response.raise_for_status()
-            return True
-    except Exception as e:
-        print(f"Failed to send file: {e}")
-        return False
+import fire_trend
+from trend_panel import trend_panel
 
 # --- SHARED DOMAIN CONFIGURATIONS ---
 SEA_LAT = [-11.0, 28.0]
@@ -76,30 +38,25 @@ SEA_LON = [90.0, 142.0]
 SATELLITE_CONFIGS = {
     'NOAA-20': {
         'bucket': 'noaa-nesdis-n20-pds',
-        'efire_prefix': 'VIIRS_EFIRE_VIIRSI_EDR',
         'aod_prefix': 'VIIRS-JRR-AOD'
     },
     'NOAA-21': {
         'bucket': 'noaa-nesdis-n21-pds',
-        'efire_prefix': 'VIIRS_EFIRE_VIIRSI_EDR',
         'aod_prefix': 'VIIRS-JRR-AOD'
     },
     'S-NPP': {
         'bucket': 'noaa-nesdis-snpp-pds',
-        'efire_prefix': 'VIIRS_EFIRE_VIIRSI_EDR',
         'aod_prefix': 'VIIRS-JRR-AOD'
     }
 }
 
-s3_client = boto3.client('s3', config=Config(signature_version=UNSIGNED))
+# --- HOTSPOT TREND SETTINGS (days and area come from the workflow inputs) ---
+CACHE_DIR = os.getenv("HOTSPOT_CACHE_DIR", "cache")     # per-day daytime fire pixels, kept between runs on the `data` branch
+DEFAULT_DAYS = 14
+DEFAULT_AREA = "all"
 
-# --- STATIC REPLACEMENT FOR TLE ORBITAL PREDICTION ---
-def get_typical_overpass_hours(night_only=False, day_only=False):
-    if day_only:
-        return [3, 4, 5, 6, 7, 8]       # Expanded window (UTC)
-    if night_only:
-        return [15, 16, 17, 18, 19, 20] # Expanded window (UTC)
-    return [3, 4, 5, 6, 7, 8, 15, 16, 17, 18, 19, 20]
+s3_client = boto3.client('s3', config=Config(signature_version=UNSIGNED, max_pool_connections=24,
+                                             retries={'max_attempts': 8, 'mode': 'standard'}))
 
 # --- S3 ATOMIC TRANSACTIONS ---
 def download_worker(bucket, key, local_path):
@@ -110,22 +67,6 @@ def download_worker(bucket, key, local_path):
     except Exception as e:
         print(f"[!] Fail transfer: {os.path.basename(key)}: {e}")
         return None
-
-# --- ENGINE LOGIC FOR ACTIVE HOTSPOTS ---
-def scrape_efire(sat_name, config, date_obj, hours, label):
-    prefix = f"{config['efire_prefix']}/{date_obj.strftime('%Y/%m/%d')}/"
-    tasks = []
-    try:
-        res = s3_client.list_objects_v2(Bucket=config['bucket'], Prefix=prefix)
-        for obj in res.get('Contents', []):
-            fn = os.path.basename(obj['Key'])
-            match = re.search(r'_s(\d{14})', fn)
-            if match and int(match.group(1)[8:10]) in hours:
-                local_fn = f"efire_{label}_{sat_name}_{fn}"
-                tasks.append((config['bucket'], obj['Key'], local_fn))
-    except Exception as e:
-        print(f"[!] Warning: Unable to scrape EFIRE for {sat_name} on {date_obj.date()}: {e}")
-    return tasks
 
 # --- ENGINE LOGIC FOR RASTER AOD ---
 def scrape_aod(sat_name, config, date_obj, label):
@@ -163,23 +104,52 @@ def rasterize_aod(lats, lons, aods, max_aod=None):
     rgba[norm_y[mask], norm_x[mask]] = colors
     return rgba, max_aod
 
+# --- DAYS AND AREA OF THE TREND ---
+def get_selection():
+    """Days and area: the workflow inputs when given, else the selection saved by the last run that had inputs, else the defaults."""
+    days_in = os.getenv("HOTSPOT_DAYS", "").strip()
+    area_in = os.getenv("HOTSPOT_AREA", "").strip()
+    saved = {}
+    selection_file = os.path.join(CACHE_DIR, "selection.json")
+    try:
+        with open(selection_file) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        pass
+    try:
+        days = int(days_in) if days_in else int(saved.get("days", DEFAULT_DAYS))
+    except ValueError:
+        raise SystemExit(f"[X] days must be a whole number from 1 to {fire_trend.MAX_DAYS}, got {days_in!r}")
+    if not 1 <= days <= fire_trend.MAX_DAYS:
+        raise SystemExit(f"[X] days must be from 1 to {fire_trend.MAX_DAYS}, got {days}")
+    area = area_in or saved.get("area", DEFAULT_AREA)
+    if (days_in or area_in) and os.getenv("HOTSPOT_SAVE_SELECTION") == "true":
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(selection_file, "w") as f:
+            json.dump({"days": days, "area": area}, f)
+    return days, area
+
 # --- EXECUTION TARGET PIPELINE ---
 def main():
     sgt_tz = datetime.timezone(datetime.timedelta(hours=8))
     local_now = datetime.datetime.now(sgt_tz)
 
     today_date = local_now.date()
-    yesterday_date = today_date - datetime.timedelta(days=1)
-
-    sg_date_str = local_now.strftime('%Y%m%d_%H%M')
 
     # IMPORTANT: Create output directory for GitHub Artifacts
     os.makedirs("output", exist_ok=True)
-    output_filename = os.path.join("output", f"hotspots_aod_map_{sg_date_str}.html")
 
     print(f"[*] Combined Core Initiated | SGT Now: {local_now.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    send_telegram_message(f"🚀 *Pipeline Started*\n🕒 SGT: `{local_now.strftime('%Y-%m-%d %H:%M:%S')}`\nTargeting AOD (Today) & EFIRE (Yesterday Night + Today Day).")
+    domain = (SEA_LAT[0], SEA_LON[0], SEA_LAT[1], SEA_LON[1])
+    days, area_text = get_selection()
+    try:
+        area = fire_trend.parse_area(area_text, domain)
+    except ValueError as e:
+        raise SystemExit(f"[X] {e}")
+    end_day = fire_trend.latest_day()
+    dates = fire_trend.day_list(end_day, days)
+    print(f"[*] Hotspot trend: {days} days up to {end_day} (UTC) | area: {area.name}")
 
     m = folium.Map(location=[8.5, 116.0], zoom_start=5, tiles=None)
 
@@ -194,7 +164,7 @@ def main():
     folium.TileLayer(
         tiles="OpenStreetMap",
         name="OpenStreetMap (Labels & Areas)",
-        show=False 
+        show=False
     ).add_to(m)
 
     # Country Boundaries Overlay
@@ -206,24 +176,23 @@ def main():
     ).add_to(m)
 
     feature_groups = {
-        "EFIRE_Yesterday_Night": folium.FeatureGroup(name=f"🌌 EFIRE Hotspots Night ({yesterday_date})", show=True),
-        "EFIRE_Today_Day": folium.FeatureGroup(name=f"🔥 EFIRE Hotspots Day ({today_date})", show=True),
+        "Hotspots_Day": folium.FeatureGroup(name=f"🔥 Daytime hotspots ({end_day} UTC)", show=True),
         "AOD_Today": folium.FeatureGroup(name=f"💨 Aerosol AOD ({today_date})", show=True),
-        "Hotspot_Density_Night": folium.FeatureGroup(name="🧲 Density Heatmap (Night)", show=False),
-        "Hotspot_Density_Day": folium.FeatureGroup(name="🧲 Density Heatmap (Day)", show=False)
+        "Area": folium.FeatureGroup(name=f"📐 Trend area: {area.name}", show=True),
     }
 
+    # --- Daytime fire pixels: refresh the per-day cache, newest day first ---
+    budget_s = float(os.getenv("HOTSPOT_BUDGET_MIN", "60")) * 60
+    fetched, left = fire_trend.refresh(CACHE_DIR, dates, s3_client, SATELLITE_CONFIGS, domain, budget_s=budget_s, workers=12)
+    fire_trend.prune(CACHE_DIR, end_day)
+    print(f"[*] Hotspot cache: {len(fetched)} days fetched, {len(left)} left for a later run (time budget {budget_s / 60:.0f} min)")
+
+    # --- AOD downloads (today) ---
     download_manifest = []
-
-    y_night_hours = get_typical_overpass_hours(night_only=True)
-    t_day_hours = get_typical_overpass_hours(day_only=True)
-
     for sat, config in SATELLITE_CONFIGS.items():
-        download_manifest.extend(scrape_efire(sat, config, yesterday_date, y_night_hours, "YESTERDAY_NIGHT"))
-        download_manifest.extend(scrape_efire(sat, config, today_date, t_day_hours, "TODAY_DAY"))
         download_manifest.extend(scrape_aod(sat, config, today_date, "TODAY_AOD"))
 
-    print(f"[*] Found {len(download_manifest)} telemetry files matching current window criteria.")
+    print(f"[*] Found {len(download_manifest)} AOD files matching current window criteria.")
 
     downloaded_paths = []
     if download_manifest:
@@ -238,62 +207,14 @@ def main():
 
     print("\n[*] Processing local footprints into vector entities...")
     aod_lats, aod_lons, aod_vals = [], [], []
-    heatmap_data_night = []  
-    heatmap_data_day = []    
-    hotspots_plotted = 0
 
     for path in downloaded_paths:
         if not os.path.exists(path) or os.path.getsize(path) == 0:
             print(f"[!] Skipping empty or missing file: {path}")
             continue
 
-        engine_choice = 'h5netcdf' if path.endswith('.h5') else 'netcdf4'
-
         try:
-            if "efire" in path:
-                sat_name = path.split("_")[3]
-                is_night = "YESTERDAY_NIGHT" in path
-                target_key = "EFIRE_Yesterday_Night" if is_night else "EFIRE_Today_Day"
-                target_fg = feature_groups[target_key]
-
-                with xr.open_dataset(path, engine=engine_choice) as ds:
-                    lat_vars = [v for v in ds.variables if 'FP_latitude' in v or 'latitude' in v.lower()]
-                    relative_lons = [v for v in ds.variables if 'FP_longitude' in v or 'longitude' in v.lower()]
-                    pow_vars = [v for v in ds.variables if 'FP_power' in v or 'FRP' in v or 'power' in v.lower()]
-
-                    if not (lat_vars and relative_lons and pow_vars):
-                        continue
-
-                    lats = np.atleast_1d(ds[lat_vars[0]].values)
-                    lons = np.atleast_1d(ds[relative_lons[0]].values)
-                    frps = np.atleast_1d(ds[pow_vars[0]].values)
-
-                    for i in range(len(lats)):
-                        lat, lon, p = lats[i], lons[i], frps[i]
-                        if np.isnan(p) or p < 0: continue
-
-                        if (SEA_LAT[0] <= lat <= SEA_LAT[1]) and (SEA_LON[0] <= lon <= SEA_LON[1]):
-                            if is_night:
-                                heatmap_data_night.append([float(lat), float(lon)])
-                            else:
-                                heatmap_data_day.append([float(lat), float(lon)])
-
-                            color = '#FFD700' if p < 10 else ('#FF8C00' if p < 50 else '#FF4500')
-                            popup_html = f"<b>🛰️ {sat_name}</b><br>Lat: {lat:.3f}<br>Lon: {lon:.3f}<br>FRP: <b>{p:.1f} MW</b>"
-
-                            folium.CircleMarker(
-                                location=[lat, lon],
-                                radius=float(np.clip(p / 6.0, 6, 14)),
-                                color=color,
-                                weight=2,
-                                fill=True,
-                                fill_color=color,
-                                fill_opacity=0.85,
-                                popup=folium.Popup(popup_html, max_width=150)
-                            ).add_to(target_fg)
-                            hotspots_plotted += 1
-
-            elif "aod" in path:
+            if "aod" in path:
                 with xr.open_dataset(path, engine="netcdf4") as ds:
                     if 'AOD550' in ds and 'Latitude' in ds and 'Longitude' in ds:
                         a = ds['AOD550'].values[::5, ::5].flatten()
@@ -309,7 +230,6 @@ def main():
         except Exception as e:
             print(f"[!] Processing structural fault on file {os.path.basename(path)}: {e}")
 
-    aod_mapped = False
     aod_max_scale = 5.0
     if aod_vals:
         print(f"[*] Mapping gridded AOD surface overlay: {len(aod_vals)} data arrays.")
@@ -320,38 +240,45 @@ def main():
             origin='upper',
             interactive=False
         ).add_to(feature_groups["AOD_Today"])
-        aod_mapped = True
 
-    # Generate Night Heatmap
-    if heatmap_data_night:
-        print(f"[*] Generating Night Density Heatmap from {len(heatmap_data_night)} points.")
-        HeatMap(
-            heatmap_data_night,
-            name="Density Night",
-            min_opacity=0.4,
-            radius=15,
-            blur=10,
-            max_zoom=1,
-        ).add_to(feature_groups["Hotspot_Density_Night"])
+    # --- Daytime hotspots of the latest day, from the cache (de-duplicated) ---
+    hotspots_plotted = 0
+    latest = fire_trend.load_day(CACHE_DIR, end_day)
+    if latest is not None:
+        for lat, lon, p, sat in zip(latest["lat"], latest["lon"], latest["frp"], latest["sat"]):
+            color = '#FFD700' if p < 10 else ('#FF8C00' if p < 50 else '#FF4500')
+            popup_html = (f"<b>🛰️ {fire_trend.SAT_ORDER[int(sat)]}</b><br>Lat: {lat:.3f}<br>Lon: {lon:.3f}"
+                          f"<br>FRP: <b>{p:.1f} MW</b>")
+            folium.CircleMarker(
+                location=[float(lat), float(lon)],
+                radius=float(np.clip(p / 6.0, 6, 14)),
+                color=color,
+                weight=2,
+                fill=True,
+                fill_color=color,
+                fill_opacity=0.85,
+                popup=folium.Popup(popup_html, max_width=150)
+            ).add_to(feature_groups["Hotspots_Day"])
+            hotspots_plotted += 1
+    print(f"[*] Hotspot markers drawn for {end_day}: {hotspots_plotted}")
 
-    # Generate Day Heatmap
-    if heatmap_data_day:
-        print(f"[*] Generating Day Density Heatmap from {len(heatmap_data_day)} points.")
-        HeatMap(
-            heatmap_data_day,
-            name="Density Day",
-            min_opacity=0.4,
-            radius=15,
-            blur=10,
-            max_zoom=1,
-        ).add_to(feature_groups["Hotspot_Density_Day"])
+    # --- Trend of daily unique daytime hotspots in the chosen area ---
+    rows = fire_trend.build_series(CACHE_DIR, dates, area)
+    print(f"\n[*] Daily unique daytime hotspots in {area.name}:")
+    for r in rows:
+        state = "no data" if r["count"] is None else ("complete" if r["complete"] else "partial")
+        print(f"    {r['date']}  {'-' if r['count'] is None else r['count']:>6}  {state}  granules={r['granules']}")
+    m.get_root().html.add_child(folium.Element(trend_panel(rows, area.name, left=len(left))))
+    if area.kind != "domain":
+        folium.GeoJson(
+            area.geojson(),
+            style_function=lambda x: {"color": "#4dd0e1", "weight": 2.5, "fillOpacity": 0.04, "dashArray": "6 4"},
+        ).add_to(feature_groups["Area"])
 
     # Layer stacking
     feature_groups["AOD_Today"].add_to(m)
-    feature_groups["Hotspot_Density_Night"].add_to(m)
-    feature_groups["Hotspot_Density_Day"].add_to(m)
-    feature_groups["EFIRE_Yesterday_Night"].add_to(m)
-    feature_groups["EFIRE_Today_Day"].add_to(m)
+    feature_groups["Area"].add_to(m)
+    feature_groups["Hotspots_Day"].add_to(m)
 
     composite_legend = f"""
     <div style="position: fixed; bottom: 35px; left: 25px; width: 235px; height: 195px;
@@ -376,16 +303,10 @@ def main():
     m.get_root().html.add_child(folium.Element(composite_legend))
     folium.LayerControl(collapsed=False).add_to(m)
 
-    # Save a dynamically named copy for the Telegram upload
-    m.save(output_filename)
-    
     # Save an index.html copy for GitHub Pages deployment
     m.save(os.path.join("output", "index.html"))
-    
-    print(f"\n[!] SUCCESS: Target structural mapping complete. Saved to '{output_filename}' and 'output/index.html'")
 
-    send_telegram_message(f"🎨 *Section 3 Complete: Visualization Rendering*\n• Hotspots Rendered: `{hotspots_plotted}` fires.\n• Map file written: `{output_filename}`")
-    send_telegram_file(output_filename, caption="📊 *Map Product Ready*\nHere is the compiled Southeast Asia active fire and aerosol overlay map.")
+    print("\n[!] SUCCESS: Target structural mapping complete. Saved to 'output/index.html'")
 
     if downloaded_paths:
         print("[*] Tearing down cached track temporary segments...")

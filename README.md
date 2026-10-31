@@ -1,0 +1,42 @@
+# hotspot_aod_plots
+
+Map of Southeast Asia (90-142E, 11S-28N) with the day's **aerosol optical depth** (VIIRS AOD550, NOAA-20 / NOAA-21 / S-NPP),
+the **daytime fire hotspots** of the latest day, and a **trend panel** with the daily number of daytime hotspots in an area
+over the past days. Built by `.github/workflows/main.yml` (three times a day and on demand) and published to GitHub Pages.
+
+## Choosing the days and the area
+
+Run the workflow by hand (Actions > Generate Hotspots Map > Run workflow) and fill in:
+
+| input | meaning |
+|---|---|
+| `days` | 1-90 days counted back from the latest daytime day (UTC) |
+| `area` | `all`; a place name (`Riau`, `Jambi`, `South Sumatra`, `West Kalimantan`, `Central Kalimantan`, `South Kalimantan`, `Cambodia`, `Kota Tinggi (Johor)`, `Mersing (Johor)`, `Singapore`), several joined with `|`; or a box `south,west,north,east` such as `-3,100,2,106` |
+
+Leave an input blank to keep the last choice (the scheduled runs use it too). The choice is remembered only when the run is on the
+default branch. A new place name is one entry in `regions.geojson`; any other place can be given as a box.
+
+## What is counted
+
+* VIIRS 375 m active fire (EFIRE) pixels, **daytime only** (`FP_Day` = 1; the afternoon passes, granules starting 03-08 UTC),
+  with fire mask nominal or high (`FP_FireMask` 8 or 9). Pixels flagged as persistent heat sources are removed.
+* **Unique**: one fire is usually seen by several passes. A pixel is dropped when an earlier granule (NOAA-21, then NOAA-20, then
+  S-NPP, then in time order) already has a pixel within **500 m**; pixels of the same granule never drop each other, so a fire
+  front that covers many pixels still counts as many. The radius is `DEDUPE_RADIUS_M` in `fire_trend.py`.
+* A day is a UTC day. The latest day is partial until all its passes are posted (about 10:00 UTC) and is drawn lighter.
+* Fire detection is blocked by cloud and thick smoke, so a drop in the count can be cloud rather than fewer fires. A yellow dot
+  marks a day on which a satellite had far fewer granules than usual.
+
+## Cache
+
+`data` branch: one small file per UTC day with the daytime fire pixels of the whole domain (`fires_YYYYMMDD.npz`, about 40 KB),
+the last 100 days, kept as a single force-pushed commit. A run only downloads the days that are missing or were fetched before
+their passes were all posted (about 30 s per day, so a first run for 90 days takes about 50 minutes). If a run runs out of its
+time budget (`HOTSPOT_BUDGET_MIN`) the older days are fetched on the next run and shown as missing until then.
+
+## Files
+
+* `script.py` - builds the map (AOD overlay, latest-day hotspots, trend panel)
+* `fire_trend.py` - fire download, filtering, de-duplication, per-day cache, areas, daily series
+* `trend_panel.py` - the trend panel (inline SVG)
+* `regions.geojson` - area outlines from `model_forecast`: Natural Earth (public domain) and geoBoundaries gbOpen ADM2 (CC BY 4.0)
