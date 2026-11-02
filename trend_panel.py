@@ -98,6 +98,8 @@ SCRIPT = r"""
         var p = series(), t = D.labels[i] + ' ' + D.years[i] + ': ';
         if (p.c[i] === null) return t + 'no data';
         t += p.c[i] + ' unique daytime hotspots';
+        var m = movingMean()[i];
+        t += m === null ? ' (7-day mean: not enough complete days yet)' : ' (7-day mean ' + (m >= 100 ? Math.round(m) : m.toFixed(1)) + ')';
         if (!p.k[i]) t += ' (partial: passes of this day are still being posted)';
         if (D.low[i]) t += ' (a satellite had far fewer granules than usual)';
         var g = D.gran[i], ks = Object.keys(g);
