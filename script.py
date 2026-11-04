@@ -83,6 +83,24 @@ def scrape_aod(sat_name, config, date_obj, label):
         print(f"[!] Warning: Unable to scrape AOD for {sat_name} on {date_obj.date()}: {e}")
     return tasks
 
+def aod_files(date_obj):
+    return [t for sat, config in SATELLITE_CONFIGS.items() for t in scrape_aod(sat, config, date_obj, "TODAY_AOD")]
+
+
+def pick_aod_day(today, files_of=aod_files, back=4):
+    """(day, files) of the AOD to draw: the newest of the last `back` days whose files are at least half as many as the day
+    before's. Early in a day only the first few passes are posted, and those alone would leave the map almost empty."""
+    cands = []
+    for k in range(back):
+        day = today - datetime.timedelta(days=k)
+        cands.append((day, files_of(day)))
+    for i, (day, files) in enumerate(cands):
+        older = cands[i + 1][1] if i + 1 < len(cands) else []
+        if files and len(files) >= 0.5 * len(older):
+            return day, files
+    return today, []
+
+
 # --- RASTERIZATION ENGINE ---
 def rasterize_aod(lats, lons, aods, max_aod=None):
     if max_aod is None:
@@ -249,17 +267,19 @@ def main():
     # --- Daytime fire pixels: refresh the per-day cache, newest day first ---
     budget_s = float(os.getenv("HOTSPOT_BUDGET_MIN", "60")) * 60
     fetched, left = fire_trend.refresh(CACHE_DIR, dates, s3_client, SATELLITE_CONFIGS, domain, budget_s=budget_s, workers=12)
+    if days > 1 and fire_trend.load_day(CACHE_DIR, end_day) is None:
+        # the passes of the newest day are not posted yet (its window opens at 03 UTC): show the day before instead of an empty one
+        end_day -= datetime.timedelta(days=1)
+        dates = fire_trend.day_list(end_day, days)
+        print(f"[*] No EFIRE granules for {end_day + datetime.timedelta(days=1)} yet: the trend ends on {end_day}")
+        more, left = fire_trend.refresh(CACHE_DIR, dates, s3_client, SATELLITE_CONFIGS, domain, budget_s=budget_s, workers=12)
+        fetched += more
+        feature_groups["Hotspots_Day"].layer_name = f"🔥 Daytime hotspots ({end_day} UTC)"
     fire_trend.prune(CACHE_DIR, end_day)
     print(f"[*] Hotspot cache: {len(fetched)} days fetched, {len(left)} left for a later run (time budget {budget_s / 60:.0f} min)")
 
-    # --- AOD downloads: today's passes, or the latest earlier day that has any (before 03 UTC today's have not happened yet) ---
-    download_manifest, aod_date = [], today_date
-    for back in range(4):
-        aod_date = today_date - datetime.timedelta(days=back)
-        for sat, config in SATELLITE_CONFIGS.items():
-            download_manifest.extend(scrape_aod(sat, config, aod_date, "TODAY_AOD"))
-        if download_manifest:
-            break
+    # --- AOD downloads: today's passes, or the latest earlier day while today's are still few (they start at about 03 UTC) ---
+    aod_date, download_manifest = pick_aod_day(today_date)
     feature_groups["AOD_Today"].layer_name = f"💨 Aerosol AOD ({aod_date})"
 
     print(f"[*] Found {len(download_manifest)} AOD files matching current window criteria (day {aod_date}).")
