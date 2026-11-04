@@ -382,7 +382,7 @@ def trend_panel(places, left=0):
         {"".join(b[1] for b in blocks)}
         <details style="color:#888; font-size: 9px; margin-top: 4px; line-height: 1.35;">
             <summary style="cursor: pointer;">About this chart</summary>
-            Unique VIIRS daytime fire pixels (NOAA-20, NOAA-21, S-NPP; nominal/high confidence; persistent heat sources removed),
+            Unique VIIRS daytime fire pixels (NOAA-20, NOAA-21; nominal/high confidence; persistent heat sources removed),
             repeats of one fire in other passes merged within 500 m. UTC days. Each place has its own scale, which follows the days
             on screen. Press and drag moves the chosen day; the wheel or a pinch zooms; Shift and wheel, two fingers, or the strip
             under the chart scroll. Cloud or thick smoke hides fires, so a drop can be cloud, not fewer fires.

@@ -1,9 +1,9 @@
 """Daytime VIIRS active fires, cached per UTC day, and the daily hotspot trend for an area.
 
-Source: VIIRS EFIRE (375 m) of NOAA-20, NOAA-21 and S-NPP on the NOAA open-data buckets. Only daytime fire pixels are kept
+Source: VIIRS EFIRE (375 m) of NOAA-20 and NOAA-21 on the NOAA open-data buckets (S-NPP is decommissioned). Only daytime fire pixels are kept
 (the afternoon passes over the domain: granules that start 03-08 UTC). A day is a UTC day, which is also the local day there.
 
-One fire is usually seen by several passes (three satellites, overlapping orbits), so pixels are de-duplicated: a pixel is dropped
+One fire is usually seen by several passes (two satellites, overlapping orbits), so pixels are de-duplicated: a pixel is dropped
 when an earlier granule already has a detection within DEDUPE_RADIUS_M of it. Pixels of one granule never drop each other, so a
 fire front that covers many neighbouring pixels still counts as many.
 """
@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 EFIRE_PREFIX = "VIIRS_EFIRE_VIIRSI_EDR"
-SAT_ORDER = ("NOAA-21", "NOAA-20", "S-NPP")      # priority when de-duplicating (the first one keeps its pixels)
+SAT_ORDER = ("NOAA-21", "NOAA-20")               # priority when de-duplicating (the first one keeps its pixels)
 DAY_HOURS = range(3, 9)                          # UTC start hours of the granules that hold the afternoon passes
 NIGHT_HOURS = range(15, 21)                      # UTC start hours of the night passes (map overlay only, not cached or charted)
 COMPLETE_AFTER_HOUR = 10                         # a day is complete when fetched after this UTC hour (the window is posted by then)
@@ -32,6 +32,9 @@ KEEP_DAYS = 100                                  # older cache files are deleted
 M_PER_DEG = 111195.0
 RULES = (f"v1 hours={DAY_HOURS.start}-{DAY_HOURS.stop - 1} mask={','.join(map(str, FIRE_MASK_KEEP))} "
          f"dedupe={DEDUPE_RADIUS_M:g} order={','.join(SAT_ORDER)}")
+# Days cached while S-NPP still flew: its pixels came last in the de-duplication, so dropping them gives exactly what a new fetch
+# without S-NPP would (see migrate)
+LEGACY_RULES = RULES.replace(f"order={','.join(SAT_ORDER)}", "order=NOAA-21,NOAA-20,S-NPP")
 REGIONS_FILE = Path(__file__).resolve().parent / "regions.geojson"
 # south, west, north, east; same box as model_forecast (the 2 x 2 grid cells around the island)
 BOXES = {"Singapore": (1.125, 103.625, 1.625, 104.125)}
@@ -211,6 +214,29 @@ def load_day(cache_dir, date):
     return day
 
 
+def migrate(cache_dir):
+    """Rewrite the cached days made with S-NPP without it: drop its pixels and its counts, keep everything else."""
+    n = 0
+    for path in sorted(Path(cache_dir).glob("fires_*.npz")):
+        try:
+            z = np.load(path)
+            meta = json.loads(str(z["meta"]))
+            if meta.get("rules") != LEGACY_RULES:
+                continue
+            keep = z["sat"] < len(SAT_ORDER)
+            day = {k: z[k][keep] for k in ("lat", "lon", "frp", "mask", "sat")}
+        except Exception as e:
+            print(f"[!] Cache file {path.name} unreadable ({e}); it will be fetched again")
+            continue
+        meta.update(rules=RULES, unique=int(keep.sum()),
+                    granules={k: v for k, v in meta.get("granules", {}).items() if k in SAT_ORDER},
+                    raw={k: v for k, v in meta.get("raw", {}).items() if k in SAT_ORDER})
+        save_day(cache_dir, datetime.datetime.strptime(path.stem[6:], "%Y%m%d").date(), day, meta)
+        n += 1
+    if n:
+        print(f"[*] Hotspot cache: {n} days converted to NOAA-20 / NOAA-21 only (S-NPP is decommissioned)")
+
+
 def prune(cache_dir, today, keep_days=KEEP_DAYS):
     oldest = today - datetime.timedelta(days=keep_days)
     for p in Path(cache_dir).glob("fires_*.npz"):
@@ -226,6 +252,7 @@ def refresh(cache_dir, dates, s3, sat_configs, domain, budget_s=3600, workers=8)
     """
     start = time.monotonic()
     fetched, left = [], []
+    migrate(cache_dir)
     today = latest_day()
     for date in sorted(dates, reverse=True):
         if date > today:

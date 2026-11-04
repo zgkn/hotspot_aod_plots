@@ -43,10 +43,6 @@ SATELLITE_CONFIGS = {
     'NOAA-21': {
         'bucket': 'noaa-nesdis-n21-pds',
         'aod_prefix': 'VIIRS-JRR-AOD'
-    },
-    'S-NPP': {
-        'bucket': 'noaa-nesdis-snpp-pds',
-        'aod_prefix': 'VIIRS-JRR-AOD'
     }
 }
 
@@ -104,21 +100,25 @@ def rasterize_aod(lats, lons, aods, max_aod=None):
     rgba[norm_y[mask], norm_x[mask]] = colors
     return rgba, max_aod
 
+NIGHT_COLOR = "#8e5cff"
+
 # --- HOTSPOT MARKERS ---
-def draw_hotspots(fires, group):
-    """One circle marker per unique fire pixel, coloured and sized by its FRP. Markers do not pass their clicks on to the map."""
+def draw_hotspots(fires, group, night=False):
+    """One circle marker per unique fire pixel. Daytime: coloured and sized by FRP. Night: a smaller violet dot with a white rim,
+    drawn on top of the daytime circles (most night pixels lie where the day ones are, so the same style would be hidden by them).
+    Markers do not pass their clicks on to the map."""
     for lat, lon, p, sat in zip(fires["lat"], fires["lon"], fires["frp"], fires["sat"]):
-        color = '#FFD700' if p < 10 else ('#FF8C00' if p < 50 else '#FF4500')
-        popup_html = (f"<b>🛰️ {fire_trend.SAT_ORDER[int(sat)]}</b><br>Lat: {lat:.3f}<br>Lon: {lon:.3f}"
+        color = NIGHT_COLOR if night else ('#FFD700' if p < 10 else ('#FF8C00' if p < 50 else '#FF4500'))
+        popup_html = (f"<b>{'🌌 Night pass' if night else '🛰️'} {fire_trend.SAT_ORDER[int(sat)]}</b><br>Lat: {lat:.3f}<br>Lon: {lon:.3f}"
                       f"<br>FRP: <b>{p:.1f} MW</b>")
         folium.CircleMarker(
             location=[float(lat), float(lon)],
-            radius=float(np.clip(p / 6.0, 6, 14)),
-            color=color,
-            weight=2,
+            radius=float(np.clip(p / 12.0, 3.5, 8)) if night else float(np.clip(p / 6.0, 6, 14)),
+            color="#ffffff" if night else color,
+            weight=1.5 if night else 2,
             fill=True,
             fill_color=color,
-            fill_opacity=0.85,
+            fill_opacity=0.95 if night else 0.85,
             bubbling_mouse_events=False,
             popup=folium.Popup(popup_html, max_width=150)
         ).add_to(group)
@@ -322,7 +322,7 @@ def main():
     try:
         night, _ = fire_trend.fetch_day(s3_client, SATELLITE_CONFIGS, yesterday_date, domain, workers=12,
                                         hours=fire_trend.NIGHT_HOURS, daytime=False)
-        night_drawn = draw_hotspots(night, feature_groups["Hotspots_Night"])
+        night_drawn = draw_hotspots(night, feature_groups["Hotspots_Night"], night=True)
     except Exception as e:
         print(f"[!] Night hotspots for {yesterday_date} unavailable: {e}")
     print(f"[*] Night hotspot markers drawn for {yesterday_date}: {night_drawn}")
@@ -357,8 +357,8 @@ def main():
     # Layer stacking
     feature_groups["AOD_Today"].add_to(m)
     feature_groups["Area"].add_to(m)
-    feature_groups["Hotspots_Night"].add_to(m)
     feature_groups["Hotspots_Day"].add_to(m)
+    feature_groups["Hotspots_Night"].add_to(m)          # on top of the daytime circles, so the night pixels are not hidden by them
 
     composite_legend = f"""
     <style>
@@ -386,7 +386,8 @@ def main():
         <div class="lg-frp" style="line-height: 16px; margin-bottom: 8px;">
             <span class="lg-item"><span style="display: inline-block; width: 6px; height: 6px; background: #FFD700; border-radius: 50%; margin-right: 5px;"></span> Low (&lt;10 MW)</span><br>
             <span class="lg-item"><span style="display: inline-block; width: 10px; height: 10px; background: #FF8C00; border-radius: 50%; margin-right: 5px;"></span> Mid (10-50 MW)</span><br>
-            <span class="lg-item"><span style="display: inline-block; width: 14px; height: 14px; background: #FF4500; border-radius: 50%; margin-right: 5px;"></span> High (&gt;50 MW)</span>
+            <span class="lg-item"><span style="display: inline-block; width: 14px; height: 14px; background: #FF4500; border-radius: 50%; margin-right: 5px;"></span> High (&gt;50 MW)</span><br>
+            <span class="lg-item"><span style="display: inline-block; width: 8px; height: 8px; background: #8e5cff; border: 1.5px solid #fff; border-radius: 50%; margin-right: 4px; vertical-align: -2px;"></span> Night pass</span>
         </div>
         <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
         <b class="lg-title" style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">💨 Aerosol Loading (AOD Today)</b>

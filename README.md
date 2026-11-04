@@ -1,6 +1,6 @@
 # hotspot_aod_plots
 
-Map of Southeast Asia (90-142E, 11S-28N) with the day's **aerosol optical depth** (VIIRS AOD550, NOAA-20 / NOAA-21 / S-NPP),
+Map of Southeast Asia (90-142E, 11S-28N) with the day's **aerosol optical depth** (VIIRS AOD550, NOAA-20 / NOAA-21),
 the **daytime fire hotspots** of the latest day, and a **trend panel** with the daily number of daytime hotspots in an area
 over the past days. Built by `.github/workflows/main.yml` (three times a day and on demand) and published to GitHub Pages.
 
@@ -36,7 +36,7 @@ default branch. A new place name is one entry in `regions.geojson`; any other pl
 * VIIRS 375 m active fire (EFIRE) pixels, **daytime only** (`FP_Day` = 1; the afternoon passes, granules starting 03-08 UTC),
   with fire mask nominal or high (`FP_FireMask` 8 or 9). Pixels flagged as persistent heat sources are removed.
 * **Unique**: one fire is usually seen by several passes. A pixel is dropped when an earlier granule (NOAA-21, then NOAA-20, then
-  S-NPP, then in time order) already has a pixel within **500 m**; pixels of the same granule never drop each other, so a fire
+  in time order; S-NPP is decommissioned and no longer used) already has a pixel within **500 m**; pixels of the same granule never drop each other, so a fire
   front that covers many pixels still counts as many. The radius is `DEDUPE_RADIUS_M` in `fire_trend.py`.
 * The map also has a **Night hotspots** layer (night pixels of the 15-20 UTC passes on the Singapore-time "yesterday", with the same
   quality filter and de-duplication). It is fetched on every run, is not cached and is not part of the chart.
