@@ -255,12 +255,17 @@ def main():
     fire_trend.prune(CACHE_DIR, end_day)
     print(f"[*] Hotspot cache: {len(fetched)} days fetched, {len(left)} left for a later run (time budget {budget_s / 60:.0f} min)")
 
-    # --- AOD downloads (today) ---
-    download_manifest = []
-    for sat, config in SATELLITE_CONFIGS.items():
-        download_manifest.extend(scrape_aod(sat, config, today_date, "TODAY_AOD"))
+    # --- AOD downloads: today's passes, or the latest earlier day that has any (before 03 UTC today's have not happened yet) ---
+    download_manifest, aod_date = [], today_date
+    for back in range(4):
+        aod_date = today_date - datetime.timedelta(days=back)
+        for sat, config in SATELLITE_CONFIGS.items():
+            download_manifest.extend(scrape_aod(sat, config, aod_date, "TODAY_AOD"))
+        if download_manifest:
+            break
+    feature_groups["AOD_Today"].layer_name = f"💨 Aerosol AOD ({aod_date})"
 
-    print(f"[*] Found {len(download_manifest)} AOD files matching current window criteria.")
+    print(f"[*] Found {len(download_manifest)} AOD files matching current window criteria (day {aod_date}).")
 
     downloaded_paths = []
     if download_manifest:
