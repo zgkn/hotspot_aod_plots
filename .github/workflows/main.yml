@@ -5,6 +5,7 @@ on:
     - cron: '32 4 * * *'
     - cron: '33 19 * * *'
     - cron: '3 8 * * *'
+    - cron: '33 21 * * *'   # after the night passes (15-20 UTC) are posted
   workflow_dispatch:      # Manual trigger button
     inputs:
       days:

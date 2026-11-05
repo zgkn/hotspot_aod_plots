@@ -38,8 +38,8 @@ default branch. A new place name is one entry in `regions.geojson`; any other pl
 * **Unique**: one fire is usually seen by several passes. A pixel is dropped when an earlier granule (NOAA-21, then NOAA-20, then
   in time order; S-NPP is decommissioned and no longer used) already has a pixel within **500 m**; pixels of the same granule never drop each other, so a fire
   front that covers many pixels still counts as many. The radius is `DEDUPE_RADIUS_M` in `fire_trend.py`.
-* The map also has a **Night hotspots** layer (night pixels of the 15-20 UTC passes on the Singapore-time "yesterday", with the same
-  quality filter and de-duplication). It is fetched on every run, is not cached and is not part of the chart.
+* The map also has a **Night hotspots** layer (night pixels of the newest 15-20 UTC passes, i.e. 23:00-04:00 Singapore time, with the same
+  quality filter and de-duplication; the name says "still being posted" until about 22:00 UTC). It is fetched on every run, is not cached and is not part of the chart.
 * A day is a UTC day. The latest day is partial until all its passes are posted (about 10:00 UTC) and is drawn lighter.
 * Fire detection is blocked by cloud and thick smoke, so a drop in the count can be cloud rather than fewer fires. A yellow dot
   marks a day on which a satellite had far fewer granules than usual.

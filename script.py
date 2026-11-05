@@ -216,7 +216,8 @@ def main():
     local_now = datetime.datetime.now(sgt_tz)
 
     today_date = local_now.date()
-    yesterday_date = today_date - datetime.timedelta(days=1)
+    night_date = fire_trend.latest_night_day()           # UTC day of the newest night passes (15-20 UTC)
+    night_partial = fire_trend.utc_now() < datetime.datetime.combine(night_date, datetime.time(22))     # last passes still being posted
 
     # IMPORTANT: Create output directory for GitHub Artifacts
     os.makedirs("output", exist_ok=True)
@@ -258,7 +259,7 @@ def main():
     ).add_to(m)
 
     feature_groups = {
-        "Hotspots_Night": folium.FeatureGroup(name=f"🌌 Night hotspots ({yesterday_date} UTC)", show=True),
+        "Hotspots_Night": folium.FeatureGroup(name=f"🌌 Night hotspots ({night_date} UTC{', still being posted' if night_partial else ''})", show=True),
         "Hotspots_Day": folium.FeatureGroup(name=f"🔥 Daytime hotspots ({end_day} UTC)", show=True),
         "AOD_Today": folium.FeatureGroup(name=f"💨 Aerosol AOD ({today_date})", show=True),
         "Area": folium.FeatureGroup(name="Trend areas", control=False, show=True),    # always on: not in the layer menu
@@ -337,12 +338,12 @@ def main():
     print(f"[*] Daytime hotspot markers drawn for {end_day}: {day_drawn}")
     night_drawn = 0
     try:
-        night, _ = fire_trend.fetch_day(s3_client, SATELLITE_CONFIGS, yesterday_date, domain, workers=12,
+        night, _ = fire_trend.fetch_day(s3_client, SATELLITE_CONFIGS, night_date, domain, workers=12,
                                         hours=fire_trend.NIGHT_HOURS, daytime=False)
         night_drawn = draw_hotspots(night, feature_groups["Hotspots_Night"], night=True)
     except Exception as e:
-        print(f"[!] Night hotspots for {yesterday_date} unavailable: {e}")
-    print(f"[*] Night hotspot markers drawn for {yesterday_date}: {night_drawn}")
+        print(f"[!] Night hotspots for {night_date} unavailable: {e}")
+    print(f"[*] Night hotspot markers drawn for {night_date}: {night_drawn}")
 
     # --- Trend of daily unique daytime hotspots in the chosen places ---
     series = fire_trend.build_series(CACHE_DIR, dates, areas)

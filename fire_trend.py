@@ -52,6 +52,12 @@ def latest_day(now=None):
     return now.date() if now.hour >= DAY_HOURS.start else now.date() - datetime.timedelta(days=1)
 
 
+def latest_night_day(now=None):
+    """The most recent UTC day whose night passes (15-20 UTC) have started."""
+    now = now or utc_now()
+    return now.date() if now.hour >= NIGHT_HOURS.start else now.date() - datetime.timedelta(days=1)
+
+
 def day_list(end, days):
     return [end - datetime.timedelta(days=i) for i in range(days - 1, -1, -1)]
 
