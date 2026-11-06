@@ -24,7 +24,7 @@ Run the workflow by hand (Actions > Generate Hotspots Map > Run workflow) and fi
 | input | meaning |
 |---|---|
 | `days` | 1-90 days counted back from the latest daytime day (UTC) |
-| `area` | the places, separated by `\|`, each with its own chart: `Riau`, `Jambi`, `South Sumatra`, `West Kalimantan`, `Central Kalimantan`, `South Kalimantan`, `Cambodia`, `Kota Tinggi (Johor)`, `Mersing (Johor)`, `Singapore`, `all`, or a box `south,west,north,east` such as `-3,100,2,106`. Names joined with `+` make one combined place (`Riau+Jambi`). |
+| `area` | the places, separated by `\|`, each with its own chart: `Riau`, `Jambi`, `South Sumatra`, `West Kalimantan`, `Central Kalimantan`, `South Kalimantan`, `Cambodia`, `Myanmar`, `Viet Nam`, `Thailand`, `Lao PDR`, `Kota Tinggi (Johor)`, `Mersing (Johor)`, `Singapore`, `all`, or a box `south,west,north,east` such as `-3,100,2,106`. Names joined with `+` make one combined place (`Riau+Jambi`). |
 
 Example: `Central Kalimantan|West Kalimantan|South Kalimantan|Jambi|South Sumatra|Riau`.
 
