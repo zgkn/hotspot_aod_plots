@@ -243,6 +243,24 @@ def migrate(cache_dir):
         print(f"[*] Hotspot cache: {n} days converted to NOAA-20 / NOAA-21 only (S-NPP is decommissioned)")
 
 
+def export_day(cache_dir, date, out_dir):
+    """Write data/fires_YYYYMMDD.json for the page: the day's pixels as integer arrays (degrees x 1e4, FRP x 10, satellite index).
+
+    Returns {"n": pixels, "complete": bool} or None when the day is not cached."""
+    day = load_day(cache_dir, date)
+    if day is None:
+        return None
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    doc = {"n": int(len(day["lat"])),
+           "lat": np.rint(day["lat"].astype("float64") * 1e4).astype(int).tolist(),
+           "lon": np.rint(day["lon"].astype("float64") * 1e4).astype(int).tolist(),
+           "frp": np.rint(day["frp"].astype("float64") * 10).astype(int).tolist(),
+           "sat": day["sat"].astype(int).tolist()}
+    (out / f"fires_{date:%Y%m%d}.json").write_text(json.dumps(doc, separators=(",", ":")))
+    return {"n": doc["n"], "complete": bool(day["complete"])}
+
+
 def prune(cache_dir, today, keep_days=KEEP_DAYS):
     oldest = today - datetime.timedelta(days=keep_days)
     for p in Path(cache_dir).glob("fires_*.npz"):

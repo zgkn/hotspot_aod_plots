@@ -1,10 +1,19 @@
 # hotspot_aod_plots
 
-Map of Southeast Asia (90-142E, 11S-28N) with the day's **aerosol optical depth** (VIIRS AOD550, NOAA-20 / NOAA-21),
-the **daytime fire hotspots** of the latest day, and a **trend panel** with the daily number of daytime hotspots in an area
-over the past days. Built by `.github/workflows/main.yml` (three times a day and on demand) and published to GitHub Pages.
+Map of Southeast Asia (90-142E, 11S-28N) with the **aerosol optical depth** (VIIRS AOD550, NOAA-20 / NOAA-21), the
+**daytime fire hotspots** of the latest day, the past 14 days or a date range you choose, and a **trend panel** with the daily number
+of daytime hotspots in an area over the past days. Built by `.github/workflows/main.yml` (four times a day and on demand) and
+published to GitHub Pages.
 
 ## Reading the page
+
+The **Period** control at the top left chooses what the hotspot and AOD layers show: **Latest day** (the default), **Past 14 days**,
+or a **Date range** (From / To, up to 31 days, within the days that have data). For a period the map draws every daytime detection of
+its days (a fire seen on two days is drawn twice, smaller circles when there are very many) and the **mean AOD** of its days that have
+an AOD grid (the legend scale follows the data on screen); the text under the buttons says how many days each came from. On a phone the
+control is a small pill with the choice on it: tap it to open it. Hotspots go back as far as the trend (up to 90 days), AOD for the last
+30 days. Tapping a hotspot shows its popup, with links to open the spot in Google Maps (pin or satellite view). The Night layer
+always shows the newest night.
 
 Every chosen place is outlined on the map (a white casing under a dark line, as in the `model_forecast` viewer). Click or tap
 inside one and its daily chart opens (hidden until then); the place menu in the panel switches between the places, the chosen place
@@ -47,13 +56,18 @@ default branch. A new place name is one entry in `regions.geojson`; any other pl
 ## Cache
 
 `data` branch: one small file per UTC day with the daytime fire pixels of the whole domain (`fires_YYYYMMDD.npz`, about 40 KB),
-the last 100 days, kept as a single force-pushed commit. A run only downloads the days that are missing or were fetched before
+the last 100 days, and one with the day's AOD averaged on a 0.1 degree grid (`aod_YYYYMMDD.npz`), the last 40 days, kept as a single
+force-pushed commit. The page reads the days it needs from `data/fires_YYYYMMDD.json` and `data/aod_YYYYMMDD.png` next to it
+(written by every run). The AOD days are downloaded newest first within their own time budget (`HOTSPOT_AOD_BUDGET_MIN`, 35 minutes;
+about 100 s per day, so the first run fills about 20 of the 30 days and the next run the rest). A run only downloads the days that are missing or were fetched before
 their passes were all posted (about 30 s per day, so a first run for 90 days takes about 50 minutes). If a run runs out of its
 time budget (`HOTSPOT_BUDGET_MIN`) the older days are fetched on the next run and shown as missing until then.
 
 ## Files
 
-* `script.py` - builds the map (AOD overlay, latest-day hotspots, trend panel)
+* `script.py` - builds the map and the day files for the page
 * `fire_trend.py` - fire download, filtering, de-duplication, per-day cache, areas, daily series
+* `aod_grid.py` - AOD download, daily 0.1 degree grids, per-day cache
+* `period_panel.py` - the Period control and the hotspot / AOD layers (canvas, JavaScript)
 * `trend_panel.py` - the trend panel (inline SVG)
 * `regions.geojson` - area outlines from `model_forecast`: Natural Earth (public domain) and geoBoundaries gbOpen ADM2 (CC BY 4.0)

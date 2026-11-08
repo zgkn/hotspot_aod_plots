@@ -2,8 +2,8 @@ import os
 import sys
 import datetime
 import re
-import gc
 import json
+import shutil
 import subprocess
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,14 +21,15 @@ def install_deps():
 install_deps()
 
 import numpy as np
-import xarray as xr
 import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 import matplotlib.pyplot as plt
 import folium
 
+import aod_grid
 import fire_trend
+from period_panel import period_panel, period_script, MAX_DAYS as PERIOD_MAX_DAYS
 from trend_panel import trend_panel, PHONE_MAX_WIDTH
 
 # --- SHARED DOMAIN CONFIGURATIONS ---
@@ -54,94 +55,22 @@ DEFAULT_AREA = "all"
 s3_client = boto3.client('s3', config=Config(signature_version=UNSIGNED, max_pool_connections=24,
                                              retries={'max_attempts': 8, 'mode': 'standard'}))
 
-# --- S3 ATOMIC TRANSACTIONS ---
-def download_worker(bucket, key, local_path):
-    try:
-        if not os.path.exists(local_path):
-            s3_client.download_file(bucket, key, local_path)
-        return local_path
-    except Exception as e:
-        print(f"[!] Fail transfer: {os.path.basename(key)}: {e}")
-        return None
-
-# --- ENGINE LOGIC FOR RASTER AOD ---
-def scrape_aod(sat_name, config, date_obj, label):
-    prefix = f"{config['aod_prefix']}/{date_obj.strftime('%Y/%m/%d')}/"
-    tasks = []
-    start_win = datetime.datetime(date_obj.year, date_obj.month, date_obj.day, 2, 30, tzinfo=datetime.timezone.utc)
-    end_win = datetime.datetime(date_obj.year, date_obj.month, date_obj.day, 9, 30, tzinfo=datetime.timezone.utc)
-    try:
-        for page in s3_client.get_paginator('list_objects_v2').paginate(Bucket=config['bucket'], Prefix=prefix):
-            for obj in page.get('Contents', []):
-                match = re.search(r'_s(\d{14})', obj['Key'])
-                if match:
-                    timestamp = datetime.datetime.strptime(match.group(1), '%Y%m%d%H%M%S').replace(tzinfo=datetime.timezone.utc)
-                    if start_win <= timestamp <= end_win:
-                        local_fn = f"aod_{label}_{sat_name}_{os.path.basename(obj['Key'])}"
-                        tasks.append((config['bucket'], obj['Key'], local_fn))
-    except Exception as e:
-        print(f"[!] Warning: Unable to scrape AOD for {sat_name} on {date_obj.date()}: {e}")
-    return tasks
-
-def aod_files(date_obj):
-    return [t for sat, config in SATELLITE_CONFIGS.items() for t in scrape_aod(sat, config, date_obj, "TODAY_AOD")]
+AOD_DAYS = 30                                            # days of AOD kept (the fire pixels are kept for longer)
 
 
-def pick_aod_day(today, files_of=aod_files, back=4):
-    """(day, files) of the AOD to draw: the newest of the last `back` days whose files are at least half as many as the day
-    before's. Early in a day only the first few passes are posted, and those alone would leave the map almost empty."""
-    cands = []
-    for k in range(back):
-        day = today - datetime.timedelta(days=k)
-        cands.append((day, files_of(day)))
-    for i, (day, files) in enumerate(cands):
-        older = cands[i + 1][1] if i + 1 < len(cands) else []
-        if files and len(files) >= 0.5 * len(older):
-            return day, files
-    return today, []
+def cmap_lut():
+    """The 256 turbo colours of the AOD scale, for the page."""
+    return (plt.get_cmap('turbo')(np.linspace(0, 1, 256))[:, :3] * 255).round().astype(int).tolist()
 
 
-# --- RASTERIZATION ENGINE ---
-def rasterize_aod(lats, lons, aods, max_aod=None):
-    if max_aod is None:
-        max_aod = np.ceil(np.max(aods))
+def encode_pixels(fires):
+    """Fire pixels as integer arrays for the page (degrees x 1e4, FRP x 10, satellite index)."""
+    return {"n": int(len(fires["lat"])),
+            "lat": np.rint(fires["lat"].astype("float64") * 1e4).astype(int).tolist(),
+            "lon": np.rint(fires["lon"].astype("float64") * 1e4).astype(int).tolist(),
+            "frp": np.rint(fires["frp"].astype("float64") * 10).astype(int).tolist(),
+            "sat": fires["sat"].astype(int).tolist()}
 
-    res = 500
-    rgba = np.zeros((res, res, 4), dtype=np.uint8)
-    norm_y = ((res-1) - ((lats - SEA_LAT[0]) / (SEA_LAT[1] - SEA_LAT[0]) * (res-1))).astype(int)
-    norm_x = ((lons - SEA_LON[0]) / (SEA_LON[1] - SEA_LON[0]) * (res-1)).astype(int)
-    mask = (norm_x >= 0) & (norm_x < res) & (norm_y >= 0) & (norm_y < res)
-
-    cmap = plt.get_cmap('turbo')
-    colors = (cmap(np.clip(aods[mask], 0, max_aod) / max_aod) * 255).astype(np.uint8)
-    colors[:, 3] = 175
-    rgba[norm_y[mask], norm_x[mask]] = colors
-    return rgba, max_aod
-
-# --- HOTSPOT MARKERS ---
-def draw_hotspots(fires, group, night=False):
-    """One circle marker per unique fire pixel, coloured and sized by its FRP (day and night alike). Markers do not pass their
-    clicks on to the map."""
-    for lat, lon, p, sat in zip(fires["lat"], fires["lon"], fires["frp"], fires["sat"]):
-        color = '#FFD700' if p < 10 else ('#FF8C00' if p < 50 else '#FF4500')
-        gmap = f"https://www.google.com/maps/search/?api=1&query={lat:.5f},{lon:.5f}"
-        gsat = f"https://www.google.com/maps/@?api=1&map_action=map&center={lat:.5f},{lon:.5f}&zoom=16&basemap=satellite"
-        popup_html = (f"<b>{'🌌 Night pass' if night else '🛰️'} {fire_trend.SAT_ORDER[int(sat)]}</b><br>Lat: {lat:.3f}<br>Lon: {lon:.3f}"
-                      f"<br>FRP: <b>{p:.1f} MW</b>"
-                      f"<br><a href='{gmap}' target='_blank' rel='noopener'>📍 Open in Google Maps</a><br>"
-                      f"<a href='{gsat}' target='_blank' rel='noopener'>🛰️ Google Maps satellite view</a>")
-        folium.CircleMarker(
-            location=[float(lat), float(lon)],
-            radius=float(np.clip(p / 6.0, 6, 14)),
-            color=color,
-            weight=2,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.85,
-            bubbling_mouse_events=False,
-            popup=folium.Popup(popup_html, max_width=200)
-        ).add_to(group)
-    return len(fires["lat"])
 
 # --- OPEN THE TREND CHART WHEN THE AREA IS CLICKED ---
 AREA_CLICK_JS = """
@@ -174,6 +103,7 @@ window.addEventListener('load', function () {
         Object.keys(layers).forEach(function (id) { layers[id].setStyle(id === chosen ? CHOSEN : NORMAL); });
     };
     map.on('click', function (e) {
+        if (e.originalEvent && e.originalEvent.__hot) return;        // the click was on a hotspot: its popup, not the chart
         var id = placeAt(e.latlng);
         clearTimeout(timer);
         if (id) timer = setTimeout(function () { showTrend(true, id); }, 250);      // not on the first tap of a double-tap zoom
@@ -219,7 +149,6 @@ def main():
     sgt_tz = datetime.timezone(datetime.timedelta(hours=8))
     local_now = datetime.datetime.now(sgt_tz)
 
-    today_date = local_now.date()
     night_date = fire_trend.latest_night_day()           # UTC day of the newest night passes (15-20 UTC)
     night_partial = fire_trend.utc_now() < datetime.datetime.combine(night_date, datetime.time(22))     # last passes still being posted
 
@@ -264,8 +193,8 @@ def main():
 
     feature_groups = {
         "Hotspots_Night": folium.FeatureGroup(name=f"🌌 Night hotspots ({night_date} UTC{', still being posted' if night_partial else ''})", show=True),
-        "Hotspots_Day": folium.FeatureGroup(name=f"🔥 Daytime hotspots ({end_day} UTC)", show=True),
-        "AOD_Today": folium.FeatureGroup(name=f"💨 Aerosol AOD ({today_date})", show=True),
+        "Hotspots_Day": folium.FeatureGroup(name="🔥 Daytime hotspots", show=True),
+        "AOD_Today": folium.FeatureGroup(name="💨 Aerosol AOD", show=True),
         "Area": folium.FeatureGroup(name="Trend areas", control=False, show=True),    # always on: not in the layer menu
     }
 
@@ -279,75 +208,43 @@ def main():
         print(f"[*] No EFIRE granules for {end_day + datetime.timedelta(days=1)} yet: the trend ends on {end_day}")
         more, left = fire_trend.refresh(CACHE_DIR, dates, s3_client, SATELLITE_CONFIGS, domain, budget_s=budget_s, workers=12)
         fetched += more
-        feature_groups["Hotspots_Day"].layer_name = f"🔥 Daytime hotspots ({end_day} UTC)"
     fire_trend.prune(CACHE_DIR, end_day)
     print(f"[*] Hotspot cache: {len(fetched)} days fetched, {len(left)} left for a later run (time budget {budget_s / 60:.0f} min)")
 
-    # --- AOD downloads: today's passes, or the latest earlier day while today's are still few (they start at about 03 UTC) ---
-    aod_date, download_manifest = pick_aod_day(today_date)
-    feature_groups["AOD_Today"].layer_name = f"💨 Aerosol AOD ({aod_date})"
+    # --- AOD: one grid per UTC day in the cache (a day is downloaded once, newest first, within a time budget) ---
+    aod_end = fire_trend.utc_now().date()
+    aod_dates = fire_trend.day_list(aod_end, AOD_DAYS)
+    aod_budget_s = float(os.getenv("HOTSPOT_AOD_BUDGET_MIN", "35")) * 60
+    aod_fetched, aod_left = aod_grid.refresh(CACHE_DIR, aod_dates, s3_client, SATELLITE_CONFIGS, domain, budget_s=aod_budget_s, workers=12)
+    aod_grid.prune(CACHE_DIR, aod_end)
+    aod_days = aod_grid.good_days(CACHE_DIR, aod_dates)
+    print(f"[*] AOD cache: {len(aod_fetched)} days fetched, {len(aod_left)} left for a later run (time budget {aod_budget_s / 60:.0f} min); "
+          f"{len(aod_days)} days to show, newest {aod_days[-1] if aod_days else 'none'}")
 
-    print(f"[*] Found {len(download_manifest)} AOD files matching current window criteria (day {aod_date}).")
+    # --- the day files of the page: fire pixels of the last days of the trend, AOD grids of the days to show ---
+    data_dir = os.path.join("output", "data")
+    shutil.rmtree(data_dir, ignore_errors=True)
+    fire_days, fire_partial = [], []
+    for d in dates[-PERIOD_MAX_DAYS:]:                     # a period is limited to PERIOD_MAX_DAYS days
+        info = fire_trend.export_day(CACHE_DIR, d, data_dir)
+        if info is not None:
+            fire_days.append(d.isoformat())
+            if not info["complete"]:
+                fire_partial.append(d.isoformat())
+    aod_shown = [d.isoformat() for d in aod_days if aod_grid.export_day(CACHE_DIR, d, data_dir)]
+    print(f"[*] Day files: {len(fire_days)} days of hotspots, {len(aod_shown)} days of AOD")
 
-    downloaded_paths = []
-    if download_manifest:
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(download_worker, b, k, lf) for b, k, lf in download_manifest]
-            for fut in as_completed(futures):
-                res_path = fut.result()
-                if res_path:
-                    downloaded_paths.append(res_path)
-
-    print(f"[*] Downloaded {len(downloaded_paths)}/{len(download_manifest)} target arrays cleanly.")
-
-    print("\n[*] Processing local footprints into vector entities...")
-    aod_lats, aod_lons, aod_vals = [], [], []
-
-    for path in downloaded_paths:
-        if not os.path.exists(path) or os.path.getsize(path) == 0:
-            print(f"[!] Skipping empty or missing file: {path}")
-            continue
-
-        try:
-            if "aod" in path:
-                with xr.open_dataset(path, engine="netcdf4") as ds:
-                    if 'AOD550' in ds and 'Latitude' in ds and 'Longitude' in ds:
-                        a = ds['AOD550'].values[::5, ::5].flatten()
-                        l = ds['Latitude'].values[::5, ::5].flatten()
-                        ln = ds['Longitude'].values[::5, ::5].flatten()
-
-                        mask = (l >= SEA_LAT[0]) & (l <= SEA_LAT[1]) & \
-                               (ln >= SEA_LON[0]) & (ln <= SEA_LON[1]) & (~np.isnan(a))
-                        aod_lats.extend(l[mask])
-                        aod_lons.extend(ln[mask])
-                        aod_vals.extend(a[mask])
-
-        except Exception as e:
-            print(f"[!] Processing structural fault on file {os.path.basename(path)}: {e}")
-
-    aod_max_scale = 5.0
-    if aod_vals:
-        print(f"[*] Mapping gridded AOD surface overlay: {len(aod_vals)} data arrays.")
-        img_layer, aod_max_scale = rasterize_aod(np.array(aod_lats), np.array(aod_lons), np.array(aod_vals))
-        folium.raster_layers.ImageOverlay(
-            img_layer,
-            bounds=[[SEA_LAT[0], SEA_LON[0]], [SEA_LAT[1], SEA_LON[1]]],
-            origin='upper',
-            interactive=False
-        ).add_to(feature_groups["AOD_Today"])
-
-    # --- Hotspot markers: the latest day (from the cache) and the night before (fetched now, map only) ---
-    latest = fire_trend.load_day(CACHE_DIR, end_day)
-    day_drawn = draw_hotspots(latest, feature_groups["Hotspots_Day"]) if latest is not None else 0
-    print(f"[*] Daytime hotspot markers drawn for {end_day}: {day_drawn}")
-    night_drawn = 0
+    # --- the newest night is drawn from data in the page (fetched now, not cached) ---
+    night_pixels = {"n": 0, "lat": [], "lon": [], "frp": [], "sat": []}
     try:
         night, _ = fire_trend.fetch_day(s3_client, SATELLITE_CONFIGS, night_date, domain, workers=12,
                                         hours=fire_trend.NIGHT_HOURS, daytime=False)
-        night_drawn = draw_hotspots(night, feature_groups["Hotspots_Night"], night=True)
+        night_pixels = encode_pixels(night)
     except Exception as e:
         print(f"[!] Night hotspots for {night_date} unavailable: {e}")
-    print(f"[*] Night hotspot markers drawn for {night_date}: {night_drawn}")
+    print(f"[*] Night hotspot markers for {night_date}: {night_pixels['n']}")
+    day_now = fire_trend.load_day(CACHE_DIR, end_day)
+    print(f"[*] Daytime hotspots of {end_day}: {0 if day_now is None else len(day_now['lat'])}")
 
     # --- Trend of daily unique daytime hotspots in the chosen places ---
     series = fire_trend.build_series(CACHE_DIR, dates, areas)
@@ -372,6 +269,15 @@ def main():
         layer = folium.GeoJson(a.geojson(), style_function=lambda x: {"color": "#1a1a19", "weight": 1.6, "fillColor": "#ffffff", "fillOpacity": 0.08})
         layer.add_to(feature_groups["Area"])
         layer_names[a.id] = layer.get_name()
+    period_info = {"domain": list(domain), "nx": aod_grid.grid_shape(domain)[1], "ny": aod_grid.grid_shape(domain)[0],
+                   "aodStep": aod_grid.AOD_Q, "cmap": cmap_lut(), "sats": list(fire_trend.SAT_ORDER),
+                   "fires": fire_days, "partial": fire_partial, "aod": aod_shown,
+                   "latestFire": end_day.isoformat(), "latestAod": aod_shown[-1] if aod_shown else None,
+                   "night": {"date": night_date.isoformat(), **night_pixels}}
+    m.get_root().html.add_child(folium.Element(period_panel(period_info)))
+    m.get_root().script.add_child(folium.Element(period_script(
+        m.get_name(), feature_groups["Hotspots_Day"].get_name(), feature_groups["Hotspots_Night"].get_name(),
+        feature_groups["AOD_Today"].get_name())))
     layers_js = "{" + ", ".join(f"{json.dumps(i)}: {v}" for i, v in layer_names.items()) + "}"
     places_js = json.dumps([{"id": a.id, "polys": a.polygons()} for a in areas])
     m.get_root().script.add_child(folium.Element(AREA_CLICK_JS % (m.get_name(), places_js, layers_js)))
@@ -411,11 +317,11 @@ def main():
             <span class="lg-item"><span style="display: inline-block; width: 14px; height: 14px; background: #FF4500; border-radius: 50%; margin-right: 5px;"></span> High (&gt;50 MW)</span>
         </div>
         <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
-        <b class="lg-title" style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">💨 Aerosol Loading (AOD Today)</b>
+        <b class="lg-title" style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">💨 Aerosol Loading (<span id="aod-title">AOD</span>)</b>
         <div style="display: inline-block; width: 100%; height: 12px; background: linear-gradient(to right, #440154, #3b4cc0, #1fa0d0, #5fd35f, #ffea46, #fd1d24); border-radius: 2px; opacity: 0.8;"></div>
         <div style="width: 100%; display: flex; justify-content: space-between; padding-top: 2px; font-size: 9px; color: #aaa;">
             <span>0.0 (Clear)</span>
-            <span>{aod_max_scale:.1f}+ (Dense Plume)</span>
+            <span id="aod-max">5.0+ (Dense Plume)</span>
         </div>
         <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
         <div style="font-size: 9px; color: #4dd0e1;">Click or tap an outlined area for its hotspot chart</div>
@@ -428,14 +334,6 @@ def main():
     m.save(os.path.join("output", "index.html"))
 
     print("\n[!] SUCCESS: Target structural mapping complete. Saved to 'output/index.html'")
-
-    if downloaded_paths:
-        print("[*] Tearing down cached track temporary segments...")
-        for path in downloaded_paths:
-            if os.path.exists(path):
-                os.remove(path)
-        gc.collect()
-        print("[*] Workspace clean.")
 
 if __name__ == "__main__":
     main()

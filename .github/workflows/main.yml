@@ -66,6 +66,7 @@ jobs:
           # only the default branch remembers the choice, so a test run on another branch does not change the scheduled page
           HOTSPOT_SAVE_SELECTION: ${{ env.IS_DEFAULT }}
           HOTSPOT_BUDGET_MIN: "75"
+          HOTSPOT_AOD_BUDGET_MIN: "35"
         run: python script.py
 
       - name: Update the data branch
@@ -73,8 +74,8 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: cache
         run: |
-          printf '%s\n' "Daytime VIIRS fire pixels per UTC day used by the hotspot trend." \
-            "Automatically force-pushed by the workflow; one file per day, the last 100 days." > README.md
+          printf '%s\n' "Daytime VIIRS fire pixels (fires_*.npz, 100 days) and daily AOD grids (aod_*.npz, 40 days) used by the map." \
+            "Automatically force-pushed by the workflow; one file per day." > README.md
           git add -A
           if [ -n "$(git status --porcelain)" ]; then
             git config user.name "github-actions[bot]"
