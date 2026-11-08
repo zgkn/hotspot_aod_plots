@@ -124,8 +124,12 @@ def draw_hotspots(fires, group, night=False):
     clicks on to the map."""
     for lat, lon, p, sat in zip(fires["lat"], fires["lon"], fires["frp"], fires["sat"]):
         color = '#FFD700' if p < 10 else ('#FF8C00' if p < 50 else '#FF4500')
+        gmap = f"https://www.google.com/maps/search/?api=1&query={lat:.5f},{lon:.5f}"
+        gsat = f"https://www.google.com/maps/@?api=1&map_action=map&center={lat:.5f},{lon:.5f}&zoom=16&basemap=satellite"
         popup_html = (f"<b>{'🌌 Night pass' if night else '🛰️'} {fire_trend.SAT_ORDER[int(sat)]}</b><br>Lat: {lat:.3f}<br>Lon: {lon:.3f}"
-                      f"<br>FRP: <b>{p:.1f} MW</b>")
+                      f"<br>FRP: <b>{p:.1f} MW</b>"
+                      f"<br><a href='{gmap}' target='_blank' rel='noopener'>📍 Open in Google Maps</a><br>"
+                      f"<a href='{gsat}' target='_blank' rel='noopener'>🛰️ Google Maps satellite view</a>")
         folium.CircleMarker(
             location=[float(lat), float(lon)],
             radius=float(np.clip(p / 6.0, 6, 14)),
@@ -135,7 +139,7 @@ def draw_hotspots(fires, group, night=False):
             fill_color=color,
             fill_opacity=0.85,
             bubbling_mouse_events=False,
-            popup=folium.Popup(popup_html, max_width=150)
+            popup=folium.Popup(popup_html, max_width=200)
         ).add_to(group)
     return len(fires["lat"])
 
