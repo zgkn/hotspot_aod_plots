@@ -1,6 +1,7 @@
 """The period selector of the map and the layers it drives, as HTML + JSON data + JavaScript (no libraries besides Leaflet).
 
-A control at the top left chooses what the daytime-hotspot and AOD layers show: the latest day, the past 14 days, or a date range.
+A control at the top left chooses what the daytime-hotspot and AOD layers show: a single date (the latest day when the page opens) or a
+date range.
 * hotspots: every daytime detection of the days in the period (a fire seen on two days is drawn twice), on one canvas;
 * AOD: the mean of the daily AOD grids of the days in the period that have one, drawn as a coloured image;
 * the night layer shows the newest night, as before, with the same canvas.
@@ -25,9 +26,9 @@ STYLE = """
 .pp-btns button { flex: 1; background: #2a2a2a; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 5px 2px;
                   font: 11px Arial, sans-serif; cursor: pointer; line-height: 1.15; }
 .pp-btns button.on { background: #0e4a52; border-color: #4dd0e1; color: #fff; }
-.pp-range { display: none; grid-template-columns: 34px 1fr; gap: 4px 6px; align-items: center; margin-bottom: 5px; }
-.pp-range.show { display: grid; }
-.pp-range input { background: #222; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 3px 4px; min-width: 0;
+.pp-range, .pp-one { display: none; grid-template-columns: 34px 1fr; gap: 4px 6px; align-items: center; margin-bottom: 5px; }
+.pp-range.show, .pp-one.show { display: grid; }
+.pp-range input, .pp-one input { background: #222; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 3px 4px; min-width: 0;
                   font: 11px Arial, sans-serif; color-scheme: dark; }
 .pp-st { color: #bbb; line-height: 1.35; }
 .pp-st b { color: #fff; }
@@ -212,14 +213,15 @@ window.addEventListener('load', function () {
     // ---- the control ---------------------------------------------------------------------------------------------------
     var latestAny = D.latestAod && D.latestAod > D.latestFire ? D.latestAod : D.latestFire;
     var firstDay = D.fires.length ? D.fires[0] : latestAny;
-    var state = {mode: 'day'}, box, st, rangeEl, fromEl, toEl, btns;
+    var state = {mode: 'single'}, box, st, oneEl, dateEl, rangeEl, fromEl, toEl, btns;
     var Ctl = L.Control.extend({
         options: {position: 'topleft'},
         onAdd: function () {
             box = L.DomUtil.create('div', 'pp-box');
-            box.innerHTML = '<button type="button" class="pp-t" aria-label="Show or hide the period choices">&#128197; <span class="pp-tt">Period</span><span class="pp-car">&#9662;</span></button>' +
-                '<div class="pp-body"><div class="pp-btns"><button type="button" data-m="day">Latest day</button><button type="button" data-m="14">Past 14 days</button>' +
+            box.innerHTML = '<button type="button" class="pp-t" aria-label="Show or hide the date choices">&#128197; <span class="pp-tt">Date</span><span class="pp-car">&#9662;</span></button>' +
+                '<div class="pp-body"><div class="pp-btns"><button type="button" data-m="single">Single date</button>' +
                 '<button type="button" data-m="range">Date range</button></div>' +
+                '<div class="pp-one"><label for="pp-date">Date</label><input type="date" id="pp-date"></div>' +
                 '<div class="pp-range"><label for="pp-from">From</label><input type="date" id="pp-from"><label for="pp-to">To</label><input type="date" id="pp-to"></div>' +
                 '<div class="pp-st"></div></div>';
             L.DomEvent.disableClickPropagation(box);
@@ -235,39 +237,58 @@ window.addEventListener('load', function () {
     }
     head.addEventListener('click', function () { fold(!box.classList.contains('pp-min')); });
     fold(phone);
-    st = box.querySelector('.pp-st'); rangeEl = box.querySelector('.pp-range');
-    fromEl = box.querySelector('#pp-from'); toEl = box.querySelector('#pp-to'); btns = box.querySelectorAll('.pp-btns button');
-    fromEl.min = toEl.min = firstDay; fromEl.max = toEl.max = latestAny;
+    st = box.querySelector('.pp-st'); oneEl = box.querySelector('.pp-one'); rangeEl = box.querySelector('.pp-range');
+    dateEl = box.querySelector('#pp-date'); fromEl = box.querySelector('#pp-from'); toEl = box.querySelector('#pp-to');
+    btns = box.querySelectorAll('.pp-btns button');
+    dateEl.min = fromEl.min = toEl.min = firstDay; dateEl.max = fromEl.max = toEl.max = latestAny;
+    dateEl.value = D.latestFire;                 // the page opens on the latest day
 
     function shortSpan(a, b) { return a === b ? label(a) : label(a).slice(0, -5) + ' &ndash; ' + label(b).slice(0, -5); }
     function setMode(mode) {
         state.mode = mode;
-        if (phone && mode !== 'range' && seq) fold(true);
         Array.prototype.forEach.call(btns, function (b) { b.classList.toggle('on', b.getAttribute('data-m') === mode); });
+        oneEl.classList.toggle('show', mode === 'single');
         rangeEl.classList.toggle('show', mode === 'range');
-        if (mode === 'range' && !fromEl.value) { toEl.value = latestAny; fromEl.value = addDays(latestAny, -6); }
+        if (mode === 'range' && !fromEl.value) { toEl.value = dateEl.value || latestAny; fromEl.value = addDays(toEl.value, -6); }
         apply();
     }
     Array.prototype.forEach.call(btns, function (b) { b.addEventListener('click', function () { setMode(b.getAttribute('data-m')); }); });
-    fromEl.addEventListener('change', function () { if (state.mode === 'range') apply(); });
-    toEl.addEventListener('change', function () { if (state.mode === 'range') apply(); });
+    dateEl.addEventListener('change', function () { if (state.mode === 'single') { apply(); if (phone && dateEl.value) fold(true); } });
+    // the date that was not touched follows, so picking From after To (or To before From) does not swap the two
+    var pendingNote = '';
+    function fixRange(which) {
+        var f = fromEl.value, t = toEl.value, cap = ' (a range is limited to ' + D.maxDays + ' days)';
+        pendingNote = '';
+        if (!f || !t) return;
+        if (which === 'from') {
+            if (f > t) toEl.value = f;
+            else if (dayCount(f, t) > D.maxDays) { toEl.value = addDays(f, D.maxDays - 1); pendingNote = cap; }
+            if (toEl.value > latestAny) toEl.value = latestAny;
+        } else {
+            if (t < f) fromEl.value = t;
+            else if (dayCount(f, t) > D.maxDays) { fromEl.value = addDays(t, -(D.maxDays - 1)); pendingNote = cap; }
+            if (fromEl.value < firstDay) fromEl.value = firstDay;
+        }
+    }
+    fromEl.addEventListener('change', function () { if (state.mode === 'range') { fixRange('from'); apply(); } });
+    toEl.addEventListener('change', function () { if (state.mode === 'range') { fixRange('to'); apply(); } });
 
     function apply() {
-        var my = ++seq, from, to, fireDays, aodDays, note = '';
-        if (state.mode === 'day') {
-            fireDays = [D.latestFire]; aodDays = D.latestAod ? [D.latestAod] : [];
+        var my = ++seq, from, to, fireDays, aodDays, note = pendingNote, one = state.mode === 'single';
+        pendingNote = '';
+        if (one) {
+            from = to = dateEl.value;
+            if (!from) { st.innerHTML = 'Choose a date.'; return; }
+            fireDays = D.fires.indexOf(from) >= 0 ? [from] : []; aodDays = D.aod.indexOf(from) >= 0 ? [from] : [];
         } else {
-            if (state.mode === '14') { to = latestAny; from = addDays(to, -13); }
-            else {
-                from = fromEl.value; to = toEl.value;
-                if (!from || !to) { st.innerHTML = 'Choose the first and the last day.'; return; }
-                if (from > to) { var t = from; from = to; to = t; fromEl.value = from; toEl.value = to; }
-                if (dayCount(from, to) > D.maxDays) { from = addDays(to, -(D.maxDays - 1)); fromEl.value = from; note = ' (a period is limited to ' + D.maxDays + ' days)'; }
-            }
+            from = fromEl.value; to = toEl.value;
+            if (!from || !to) { st.innerHTML = 'Choose the first and the last day.'; return; }
+            if (from > to) { var t = from; from = to; to = t; fromEl.value = from; toEl.value = to; }
+            if (dayCount(from, to) > D.maxDays) { from = addDays(to, -(D.maxDays - 1)); fromEl.value = from; note = ' (a period is limited to ' + D.maxDays + ' days)'; }
             fireDays = between(D.fires, from, to); aodDays = between(D.aod, from, to);
         }
-        map.closePopup();                        // it would point at a hotspot of the old period
-        head.querySelector('.pp-tt').innerHTML = state.mode === 'day' ? 'Latest day' : (state.mode === '14' ? 'Past 14 days' : shortSpan(from, to));
+        map.closePopup();                        // it would point at a hotspot of the old choice
+        head.querySelector('.pp-tt').innerHTML = shortSpan(from, to);
         st.innerHTML = 'Loading&hellip;';
         var settle = function (p) { return p.then(function (v) { return {ok: true, v: v}; }, function () { return {ok: false}; }); };
         Promise.all([Promise.all(fireDays.map(function (d) { return settle(loadFires(d)); })),
@@ -280,13 +301,14 @@ window.addEventListener('load', function () {
             dayLayer.setData(fire);
             var top = renderAod(grids);
             var aodTitle = document.getElementById('aod-title'), aodMax = document.getElementById('aod-max');
-            if (aodTitle) aodTitle.textContent = state.mode === 'day' ? (D.latestAod ? 'AOD ' + label(D.latestAod) : 'AOD') : 'mean AOD of ' + grids.length + ' day' + (grids.length === 1 ? '' : 's');
+            if (aodTitle) aodTitle.textContent = one ? (grids.length ? 'AOD ' + label(from) : 'AOD') : 'mean AOD of ' + grids.length + ' day' + (grids.length === 1 ? '' : 's');
             if (aodMax && top) aodMax.innerHTML = top.toFixed(1) + '+ (Dense Plume)';
             var failed = (fireDays.length - fparts.length) + (aodDays.length - grids.length);
             var txt;
-            if (state.mode === 'day') {
-                txt = '<b>' + label(D.latestFire) + '</b>: ' + fire.n.toLocaleString() + ' daytime hotspots<br>AOD: ' +
-                      (D.latestAod ? label(D.latestAod) : 'none');
+            if (one) {
+                txt = '<b>' + label(from) + '</b>: ' + (fparts.length ? fire.n.toLocaleString() + ' daytime hotspots' +
+                      (D.partial.indexOf(from) >= 0 ? ' (partial: passes still being posted)' : '') : 'no hotspot data for this date') +
+                      '<br>AOD: ' + (grids.length ? 'available' : 'none for this date');
             } else {
                 var asked = dayCount(from, to);
                 txt = '<b>' + span(from, to) + '</b><br>' + fire.n.toLocaleString() + ' daytime hotspots (' + fparts.length + ' of ' + asked + ' days)<br>' +
@@ -297,7 +319,7 @@ window.addEventListener('load', function () {
             st.innerHTML = txt + note;
         });
     }
-    setMode('day');
+    setMode('single');
 });
 """
 

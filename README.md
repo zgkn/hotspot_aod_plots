@@ -1,30 +1,19 @@
 # hotspot_aod_plots
 
 Map of Southeast Asia (90-142E, 11S-28N) with the **aerosol optical depth** (VIIRS AOD550, NOAA-20 / NOAA-21), the
-**daytime fire hotspots** of the latest day, the past 14 days or a date range you choose, and a **trend panel** with the daily number
+**daytime fire hotspots** of the latest day, any single date or a date range you choose, and a **trend panel** with the daily number
 of daytime hotspots in an area over the past days. Built by `.github/workflows/main.yml` (four times a day and on demand) and
 published to GitHub Pages.
 
 ## Reading the page
 
-The **Period** control at the top left chooses what the hotspot and AOD layers show: **Latest day** (the default), **Past 14 days**,
-or a **Date range** (From / To, up to 31 days, within the days that have data). For a period the map draws every daytime detection of
-its days (a fire seen on two days is drawn twice, smaller circles when there are very many) and the **mean AOD** of its days that have
-an AOD grid (the legend scale follows the data on screen); the text under the buttons says how many days each came from. On a phone the
-control is a small pill with the choice on it: tap it to open it. Hotspots go back as far as the trend (up to 90 days), AOD for the last
-30 days. Tapping a hotspot shows its popup, with links to open the spot in Google Maps (pin or satellite view). The Night layer
-always shows the newest night.
-
-Every chosen place is outlined on the map (a white casing under a dark line, as in the `model_forecast` viewer). Click or tap
-inside one and its daily chart opens (hidden until then); the place menu in the panel switches between the places, the chosen place
-is drawn heavier, and the x closes the panel. On a phone the panel is a bottom sheet and the legend steps aside while it is open;
-press and drag along the chart (mouse or finger) to move the chosen day: a line with its date follows the pointer and the read-out gives
-that day's count; the same day stays marked when you switch place (on a wide screen a dashed guide also follows the mouse). Zoom in
-time with the wheel or a pinch, or jump with the 7 d / 14 d / 30 d / All buttons; scroll with Shift+wheel, two fingers, or the strip under
-the chart (drag its window to scroll, drag the window's edges to zoom, tap outside it to move it there); with the chart focused, the arrow
-keys move the chosen day. The time window is shared by all places. Tapping a hotspot dot shows its popup and does not open the chart. Each place has its own scale.
-The outlines are a permanent layer (not in the layer menu). On a phone the layer menu is a small icon: tap it to open the list, tap the
-map to close it; on a wide screen it stays open.
+The **Date** control at the top left chooses what the hotspot and AOD layers show: a **Single date** (the latest day when the page opens;
+pick any other day with the date box) or a **Date range** (From / To, up to 31 days). For a range the map draws every daytime detection
+of its days (a fire seen on two days is drawn twice, smaller circles when there are very many) and the **mean AOD** of its days that
+have an AOD grid (the legend scale follows the data on screen); the text under the buttons says how many days each came from. On a phone
+the control is a small pill with the choice on it: tap it to open it. Hotspots go back as far as the data (up to 31 days are offered),
+AOD for the last 30 days; a date without AOD data shows no AOD. Tapping a hotspot shows its popup, with links to open the spot in
+Google Maps (pin or satellite view). The Night layer always shows the newest night.
 
 ## Choosing the days and the places
 
@@ -68,6 +57,6 @@ time budget (`HOTSPOT_BUDGET_MIN`) the older days are fetched on the next run an
 * `script.py` - builds the map and the day files for the page
 * `fire_trend.py` - fire download, filtering, de-duplication, per-day cache, areas, daily series
 * `aod_grid.py` - AOD download, daily 0.1 degree grids, per-day cache
-* `period_panel.py` - the Period control and the hotspot / AOD layers (canvas, JavaScript)
+* `period_panel.py` - the Date control and the hotspot / AOD layers (canvas, JavaScript)
 * `trend_panel.py` - the trend panel (inline SVG)
 * `regions.geojson` - area outlines from `model_forecast`: Natural Earth (public domain) and geoBoundaries gbOpen ADM2 (CC BY 4.0)
