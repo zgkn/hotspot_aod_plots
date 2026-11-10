@@ -4,7 +4,8 @@ A control at the top left chooses what the daytime-hotspot and AOD layers show: 
 date range.
 * hotspots: every daytime detection of the days in the period (a fire seen on two days is drawn twice), on one canvas;
 * AOD: the mean of the daily AOD grids of the days in the period that have one, drawn as a coloured image;
-* the night layer shows the newest night, as before, with the same canvas.
+* the night layer shows the newest night, as before, with the same canvas;
+* the cloud layer (off until it is ticked in the layer menu) shows the mean cloud fraction of the days, as a white veil.
 The days come from small files next to the page (data/fires_YYYYMMDD.json, data/aod_YYYYMMDD.png) that are loaded when needed.
 Clicking a hotspot opens its popup (with links to Google Maps) and not the trend chart of the area under it.
 """
@@ -32,6 +33,7 @@ STYLE = """
                   font: 11px Arial, sans-serif; color-scheme: dark; }
 .pp-st { color: #bbb; line-height: 1.35; }
 .pp-st b { color: #fff; }
+.pp-cl { color: #bbb; line-height: 1.35; }
 .aod-img { image-rendering: auto; }
 @media (max-width: 760px) {
     .pp-box { width: 198px; padding: 6px 8px; font-size: 10px; }
@@ -41,15 +43,15 @@ STYLE = """
 </style>
 """
 
-# __MAP__, __DAYGROUP__, __NIGHTGROUP__, __AODGROUP__ are replaced by the names of the Leaflet objects
+# __MAP__, __DAYGROUP__, __NIGHTGROUP__, __AODGROUP__, __CLOUDGROUP__ are replaced by the names of the Leaflet objects
 SCRIPT = r"""
 window.addEventListener('load', function () {
-    var map = __MAP__, dayGroup = __DAYGROUP__, nightGroup = __NIGHTGROUP__, aodGroup = __AODGROUP__;
+    var map = __MAP__, dayGroup = __DAYGROUP__, nightGroup = __NIGHTGROUP__, aodGroup = __AODGROUP__, cloudGroup = __CLOUDGROUP__;
     var D = JSON.parse(document.getElementById('period-data').textContent);
     var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     var S = D.domain[0], W = D.domain[1], N = D.domain[2], E = D.domain[3];
     var BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-    var firesCache = {}, aodCache = {}, seq = 0;
+    var firesCache = {}, gridCache = {}, seq = 0, lastCloudDays = [], cloudSeq = 0;
 
     function ymd(iso) { return iso.replace(/-/g, ''); }
     function addDays(iso, n) { var d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
@@ -66,8 +68,9 @@ window.addEventListener('load', function () {
         });
         return firesCache[iso];
     }
-    function loadAod(iso) {
-        if (!aodCache[iso]) aodCache[iso] = new Promise(function (res, rej) {
+    function loadGrid(kind, iso) {               // data/aod_YYYYMMDD.png or data/cloud_YYYYMMDD.png: one grey level per cell, 255 = no data
+        var cache = gridCache[kind] || (gridCache[kind] = {});
+        if (!cache[iso]) cache[iso] = new Promise(function (res, rej) {
             var im = new Image();
             im.onload = function () {
                 var c = document.createElement('canvas');
@@ -79,9 +82,9 @@ window.addEventListener('load', function () {
                 res(g);
             };
             im.onerror = function () { rej(new Error('image')); };
-            im.src = 'data/aod_' + ymd(iso) + '.png';
+            im.src = 'data/' + kind + '_' + ymd(iso) + '.png';
         });
-        return aodCache[iso];
+        return cache[iso];
     }
     function assemble(parts) {                   // [{iso, doc}] -> one set of arrays; day = index into dates
         var n = 0, o = 0;
@@ -166,6 +169,8 @@ window.addEventListener('load', function () {
     nightGroup.addLayer(nightLayer);
     var aodImg = L.imageOverlay(BLANK, [[S, W], [N, E]], {interactive: false, className: 'aod-img'});
     aodGroup.addLayer(aodImg);
+    var cloudImg = L.imageOverlay(BLANK, [[S, W], [N, E]], {interactive: false, className: 'aod-img'});
+    cloudGroup.addLayer(cloudImg);
 
     function popupHtml(layer, i) {
         var d = layer._data, la = d.lat[i], lo = d.lon[i], at = la.toFixed(5) + ',' + lo.toFixed(5);
@@ -210,6 +215,39 @@ window.addEventListener('load', function () {
         return grids.length ? top : null;
     }
 
+    // ---- the cloud layer: the mean cloud fraction of the days, a white veil (loaded only while the layer is on) -----------------
+    function renderCloud(grids) {
+        var n = D.nx * D.ny, sum = new Float32Array(n), cnt = new Uint8Array(n), i;
+        grids.forEach(function (g) { for (i = 0; i < n; i++) { var v = g[i]; if (v !== 255) { sum[i] += v; cnt[i]++; } } });
+        var c = document.createElement('canvas'); c.width = D.nx; c.height = D.ny;
+        var x = c.getContext('2d'), img = x.createImageData(D.nx, D.ny), px = img.data;
+        for (i = 0; i < n; i++) {
+            if (!cnt[i]) continue;
+            var f = Math.min(1, sum[i] / cnt[i] / D.cloudLevels);
+            px[4 * i] = 238; px[4 * i + 1] = 243; px[4 * i + 2] = 250; px[4 * i + 3] = Math.round(215 * f);
+        }
+        x.putImageData(img, 0, 0);
+        cloudImg.setUrl(grids.length ? c.toDataURL('image/png') : BLANK);
+    }
+    function showCloud() {
+        var lg = document.getElementById('lg-cloud'), info = document.querySelector('.pp-cl'), on = map.hasLayer(cloudGroup);
+        if (lg) lg.style.display = on ? 'block' : 'none';
+        if (!on) { if (info) info.innerHTML = ''; return; }
+        var my = ++cloudSeq, days = lastCloudDays.slice(), single = state.mode === 'single';
+        Promise.all(days.map(function (d) { return loadGrid('cloud', d).then(function (v) { return v; }, function () { return null; }); })).then(function (res) {
+            if (my !== cloudSeq) return;
+            var grids = res.filter(function (g) { return g; });
+            renderCloud(grids);
+            var title = document.getElementById('cloud-title');
+            if (title) title.textContent = single ? (grids.length ? label(days[0]) : 'none') : 'mean of ' + grids.length + ' day' + (grids.length === 1 ? '' : 's');
+            if (info) info.innerHTML = single ? 'Cloud: ' + (grids.length ? 'this date' : 'none for this date')
+                : (grids.length ? 'Cloud: mean of ' + grids.length + ' of ' + lastCloudAsked + ' days' : 'Cloud: no data for these days');
+        });
+    }
+    var lastCloudAsked = 1;
+    cloudGroup.on('add', showCloud);
+    cloudGroup.on('remove', showCloud);
+
     // ---- the control ---------------------------------------------------------------------------------------------------
     var latestAny = D.latestAod && D.latestAod > D.latestFire ? D.latestAod : D.latestFire;
     var firstDay = D.fires.length ? D.fires[0] : latestAny;
@@ -223,7 +261,7 @@ window.addEventListener('load', function () {
                 '<button type="button" data-m="range">Date range</button></div>' +
                 '<div class="pp-one"><label for="pp-date">Date</label><input type="date" id="pp-date"></div>' +
                 '<div class="pp-range"><label for="pp-from">From</label><input type="date" id="pp-from"><label for="pp-to">To</label><input type="date" id="pp-to"></div>' +
-                '<div class="pp-st"></div></div>';
+                '<div class="pp-st"></div><div class="pp-cl"></div></div>';
             L.DomEvent.disableClickPropagation(box);
             L.DomEvent.disableScrollPropagation(box);
             return box;
@@ -280,19 +318,22 @@ window.addEventListener('load', function () {
             from = to = dateEl.value;
             if (!from) { st.innerHTML = 'Choose a date.'; return; }
             fireDays = D.fires.indexOf(from) >= 0 ? [from] : []; aodDays = D.aod.indexOf(from) >= 0 ? [from] : [];
+            lastCloudDays = D.cloud.indexOf(from) >= 0 ? [from] : [];
         } else {
             from = fromEl.value; to = toEl.value;
             if (!from || !to) { st.innerHTML = 'Choose the first and the last day.'; return; }
             if (from > to) { var t = from; from = to; to = t; fromEl.value = from; toEl.value = to; }
             if (dayCount(from, to) > D.maxDays) { from = addDays(to, -(D.maxDays - 1)); fromEl.value = from; note = ' (a period is limited to ' + D.maxDays + ' days)'; }
             fireDays = between(D.fires, from, to); aodDays = between(D.aod, from, to);
+            lastCloudDays = between(D.cloud, from, to);
         }
+        lastCloudAsked = dayCount(from, to);
         map.closePopup();                        // it would point at a hotspot of the old choice
         head.querySelector('.pp-tt').innerHTML = shortSpan(from, to);
         st.innerHTML = 'Loading&hellip;';
         var settle = function (p) { return p.then(function (v) { return {ok: true, v: v}; }, function () { return {ok: false}; }); };
         Promise.all([Promise.all(fireDays.map(function (d) { return settle(loadFires(d)); })),
-                     Promise.all(aodDays.map(function (d) { return settle(loadAod(d)); }))]).then(function (res) {
+                     Promise.all(aodDays.map(function (d) { return settle(loadGrid('aod', d)); }))]).then(function (res) {
             if (my !== seq) return;              // a newer choice has been made meanwhile
             var fparts = [], grids = [], k;
             for (k = 0; k < fireDays.length; k++) if (res[0][k].ok) fparts.push({iso: fireDays[k], doc: res[0][k].v});
@@ -317,6 +358,7 @@ window.addEventListener('load', function () {
             if (failed) txt += '<br><span style="color:#ffb74d">Could not load ' + failed + ' day file' + (failed === 1 ? '' : 's') +
                                ' (open the page from its web address).</span>';
             st.innerHTML = txt + note;
+            showCloud();
         });
     }
     setMode('single');
@@ -330,6 +372,6 @@ def period_panel(info):
     return STYLE + f'<script type="application/json" id="period-data">{data}</script>'
 
 
-def period_script(map_name, day_group, night_group, aod_group):
+def period_script(map_name, day_group, night_group, aod_group, cloud_group):
     return (SCRIPT.replace("__MAP__", map_name).replace("__DAYGROUP__", day_group)
-            .replace("__NIGHTGROUP__", night_group).replace("__AODGROUP__", aod_group))
+            .replace("__NIGHTGROUP__", night_group).replace("__AODGROUP__", aod_group).replace("__CLOUDGROUP__", cloud_group))

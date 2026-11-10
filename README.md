@@ -15,6 +15,11 @@ the control is a small pill with the choice on it: tap it to open it. Hotspots g
 AOD for the last 30 days; a date without AOD data shows no AOD. Tapping a hotspot shows its popup, with links to open the spot in
 Google Maps (pin or satellite view). The Night layer always shows the newest night.
 
+The **Cloud mask** layer (in the layer menu, off until ticked) is a white veil: the share of the satellite pixels that were cloudy or
+probably cloudy (VIIRS JRR cloud mask, NOAA-20 and NOAA-21, the same afternoon passes as the AOD), averaged on a 0.1 degree grid; the
+whiter, the cloudier. It follows the date control: the chosen day, or the mean of the days of a range. Cloud grids are kept for the last
+30 days and are only downloaded by the page while the layer is on. Use it to see where no fire or AOD could be seen.
+
 ## Choosing the days and the places
 
 Run the workflow by hand (Actions > Generate Hotspots Map > Run workflow) and fill in:
@@ -48,7 +53,8 @@ default branch. A new place name is one entry in `regions.geojson`; any other pl
 the last 100 days, and one with the day's AOD averaged on a 0.1 degree grid (`aod_YYYYMMDD.npz`), the last 40 days, kept as a single
 force-pushed commit. The page reads the days it needs from `data/fires_YYYYMMDD.json` and `data/aod_YYYYMMDD.png` next to it
 (written by every run). The AOD days are downloaded newest first within their own time budget (`HOTSPOT_AOD_BUDGET_MIN`, 35 minutes;
-about 100 s per day, so the first run fills about 20 of the 30 days and the next run the rest). A run only downloads the days that are missing or were fetched before
+about 100 s per day). The cloud-mask grids (`cloud_YYYYMMDD.npz`, the last 40 days) work the same way but are heavier (about 590
+granules, 22 GB, 3 minutes a day), so they have their own budget (`HOTSPOT_CLOUD_BUDGET_MIN`, 40 minutes, about 14 days per run). A run only downloads the days that are missing or were fetched before
 their passes were all posted (about 30 s per day, so a first run for 90 days takes about 50 minutes). If a run runs out of its
 time budget (`HOTSPOT_BUDGET_MIN`) the older days are fetched on the next run and shown as missing until then.
 
@@ -56,7 +62,7 @@ time budget (`HOTSPOT_BUDGET_MIN`) the older days are fetched on the next run an
 
 * `script.py` - builds the map and the day files for the page
 * `fire_trend.py` - fire download, filtering, de-duplication, per-day cache, areas, daily series
-* `aod_grid.py` - AOD download, daily 0.1 degree grids, per-day cache
-* `period_panel.py` - the Date control and the hotspot / AOD layers (canvas, JavaScript)
+* `aod_grid.py` - AOD and cloud-mask download, daily 0.1 degree grids, per-day cache
+* `period_panel.py` - the Date control and the hotspot / AOD / cloud layers (canvas, JavaScript)
 * `trend_panel.py` - the trend panel (inline SVG)
 * `regions.geojson` - area outlines from `model_forecast`: Natural Earth (public domain) and geoBoundaries gbOpen ADM2 (CC BY 4.0)

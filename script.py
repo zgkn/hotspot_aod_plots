@@ -39,11 +39,13 @@ SEA_LON = [90.0, 142.0]
 SATELLITE_CONFIGS = {
     'NOAA-20': {
         'bucket': 'noaa-nesdis-n20-pds',
-        'aod_prefix': 'VIIRS-JRR-AOD'
+        'aod_prefix': 'VIIRS-JRR-AOD',
+        'cloud_prefix': 'VIIRS-JRR-CloudMask'
     },
     'NOAA-21': {
         'bucket': 'noaa-nesdis-n21-pds',
-        'aod_prefix': 'VIIRS-JRR-AOD'
+        'aod_prefix': 'VIIRS-JRR-AOD',
+        'cloud_prefix': 'VIIRS-JRR-CloudMask'
     }
 }
 
@@ -195,6 +197,7 @@ def main():
         "Hotspots_Night": folium.FeatureGroup(name=f"🌌 Night hotspots ({night_date} UTC{', still being posted' if night_partial else ''})", show=True),
         "Hotspots_Day": folium.FeatureGroup(name="🔥 Daytime hotspots", show=True),
         "AOD_Today": folium.FeatureGroup(name="💨 Aerosol AOD", show=True),
+        "Cloud": folium.FeatureGroup(name="☁️ Cloud mask (cloud fraction)", show=False),
         "Area": folium.FeatureGroup(name="Trend areas", control=False, show=True),    # always on: not in the layer menu
     }
 
@@ -221,7 +224,21 @@ def main():
     print(f"[*] AOD cache: {len(aod_fetched)} days fetched, {len(aod_left)} left for a later run (time budget {aod_budget_s / 60:.0f} min); "
           f"{len(aod_days)} days to show, newest {aod_days[-1] if aod_days else 'none'}")
 
-    # --- the day files of the page: fire pixels of the last days of the trend, AOD grids of the days to show ---
+    # --- cloud mask: the same, one grid per UTC day (heavier: about 22 GB of granules a day, so its own time budget; it is optional,
+    #     a failure here leaves the layer empty and nothing else) ---
+    cloud_days = []
+    try:
+        cloud_budget_s = float(os.getenv("HOTSPOT_CLOUD_BUDGET_MIN", "40")) * 60
+        cloud_fetched, cloud_left = aod_grid.refresh(CACHE_DIR, aod_dates, s3_client, SATELLITE_CONFIGS, domain,
+                                                     budget_s=cloud_budget_s, workers=12, kind="cloud")
+        aod_grid.prune(CACHE_DIR, aod_end, kind="cloud")
+        cloud_days = aod_grid.good_days(CACHE_DIR, aod_dates, kind="cloud")
+        print(f"[*] Cloud mask cache: {len(cloud_fetched)} days fetched, {len(cloud_left)} left for a later run "
+              f"(time budget {cloud_budget_s / 60:.0f} min); {len(cloud_days)} days to show, newest {cloud_days[-1] if cloud_days else 'none'}")
+    except Exception as e:
+        print(f"[!] Cloud mask unavailable this run: {e}")
+
+    # --- the day files of the page: fire pixels of the last days of the trend, AOD and cloud grids of the days to show ---
     data_dir = os.path.join("output", "data")
     shutil.rmtree(data_dir, ignore_errors=True)
     fire_days, fire_partial = [], []
@@ -232,7 +249,8 @@ def main():
             if not info["complete"]:
                 fire_partial.append(d.isoformat())
     aod_shown = [d.isoformat() for d in aod_days if aod_grid.export_day(CACHE_DIR, d, data_dir)]
-    print(f"[*] Day files: {len(fire_days)} days of hotspots, {len(aod_shown)} days of AOD")
+    cloud_shown = [d.isoformat() for d in cloud_days if aod_grid.export_day(CACHE_DIR, d, data_dir, kind="cloud")]
+    print(f"[*] Day files: {len(fire_days)} days of hotspots, {len(aod_shown)} days of AOD, {len(cloud_shown)} days of cloud mask")
 
     # --- the newest night is drawn from data in the page (fetched now, not cached) ---
     night_pixels = {"n": 0, "lat": [], "lon": [], "frp": [], "sat": []}
@@ -271,19 +289,21 @@ def main():
         layer_names[a.id] = layer.get_name()
     period_info = {"domain": list(domain), "nx": aod_grid.grid_shape(domain)[1], "ny": aod_grid.grid_shape(domain)[0],
                    "aodStep": aod_grid.AOD_Q, "cmap": cmap_lut(), "sats": list(fire_trend.SAT_ORDER),
-                   "fires": fire_days, "partial": fire_partial, "aod": aod_shown,
+                   "fires": fire_days, "partial": fire_partial, "aod": aod_shown, "cloud": cloud_shown,
+                   "cloudLevels": aod_grid.KINDS["cloud"]["levels"],
                    "latestFire": end_day.isoformat(), "latestAod": aod_shown[-1] if aod_shown else None,
                    "night": {"date": night_date.isoformat(), **night_pixels}}
     m.get_root().html.add_child(folium.Element(period_panel(period_info)))
     m.get_root().script.add_child(folium.Element(period_script(
         m.get_name(), feature_groups["Hotspots_Day"].get_name(), feature_groups["Hotspots_Night"].get_name(),
-        feature_groups["AOD_Today"].get_name())))
+        feature_groups["AOD_Today"].get_name(), feature_groups["Cloud"].get_name())))
     layers_js = "{" + ", ".join(f"{json.dumps(i)}: {v}" for i, v in layer_names.items()) + "}"
     places_js = json.dumps([{"id": a.id, "polys": a.polygons()} for a in areas])
     m.get_root().script.add_child(folium.Element(AREA_CLICK_JS % (m.get_name(), places_js, layers_js)))
 
     # Layer stacking
     feature_groups["AOD_Today"].add_to(m)
+    feature_groups["Cloud"].add_to(m)
     feature_groups["Area"].add_to(m)
     feature_groups["Hotspots_Day"].add_to(m)
     feature_groups["Hotspots_Night"].add_to(m)          # on top of the daytime circles, so the night pixels are not hidden by them
@@ -322,6 +342,15 @@ def main():
         <div style="width: 100%; display: flex; justify-content: space-between; padding-top: 2px; font-size: 9px; color: #aaa;">
             <span>0.0 (Clear)</span>
             <span id="aod-max">5.0+ (Dense Plume)</span>
+        </div>
+        <div id="lg-cloud" style="display: none;">
+            <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
+            <b class="lg-title" style="font-size: 12px; color: #fff; display: block; margin-bottom: 5px;">☁️ Cloud fraction (<span id="cloud-title">cloud</span>)</b>
+            <div style="height: 12px; border: 1px solid #666; border-radius: 2px; background: linear-gradient(to right, #202020, rgba(238,243,250,0.85));"></div>
+            <div style="width: 100%; display: flex; justify-content: space-between; padding-top: 2px; font-size: 9px; color: #aaa;">
+                <span>0 (clear)</span>
+                <span>1 (cloudy)</span>
+            </div>
         </div>
         <hr style="border: 0; border-top: 1px solid #333; margin: 6px 0;">
         <div style="font-size: 9px; color: #4dd0e1;">Click or tap an outlined area for its hotspot chart</div>
