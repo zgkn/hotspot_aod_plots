@@ -9,7 +9,8 @@ published to GitHub Pages.
 
 The **Date** control at the top left chooses what the hotspot and AOD layers show: a **Single date** (the latest day when the page opens;
 pick any other day with the date box) or a **Date range** (From / To, up to 31 days). For a range the map draws every daytime detection
-of its days (a fire seen on two days is drawn twice, smaller circles when there are very many) and the **mean AOD** of its days that
+of its days (both satellites, so the same fire seen by NOAA-20 and NOAA-21 is drawn twice when the pixels are apart; a fire seen on
+two days is drawn twice; smaller circles when there are very many) and the **mean AOD** of its days that
 have an AOD grid (the legend scale follows the data on screen); the text under the buttons says how many days each came from. On a phone
 the control is a small pill with the choice on it: tap it to open it. Hotspots go back as far as the data (up to 31 days are offered),
 AOD for the last 30 days; a date without AOD data shows no AOD. Tapping a hotspot shows its popup, with links to open the spot in
@@ -38,9 +39,12 @@ default branch. A new place name is one entry in `regions.geojson`; any other pl
 
 * VIIRS 375 m active fire (EFIRE) pixels, **daytime only** (`FP_Day` = 1; the afternoon passes, granules starting 03-08 UTC),
   with fire mask nominal or high (`FP_FireMask` 8 or 9). Pixels flagged as persistent heat sources are removed.
-* **Unique**: one fire is usually seen by several passes. A pixel is dropped when an earlier granule (NOAA-21, then NOAA-20, then
-  in time order; S-NPP is decommissioned and no longer used) already has a pixel within **500 m**; pixels of the same granule never drop each other, so a fire
-  front that covers many pixels still counts as many. The radius is `DEDUPE_RADIUS_M` in `fire_trend.py`.
+* **Every detection is plotted** on the map, including pixels that lie within 500 m of a pixel of another pass, so the spread of a fire
+  between the NOAA-21 and NOAA-20 passes (about 50 minutes apart) can be followed; the popup names the satellite. The **area charts**
+  count only the **unique** pixels: a pixel is a repeat when an earlier granule (NOAA-21, then NOAA-20, then in time order) already has
+  a non-repeat pixel within **500 m** (`DEDUPE_RADIUS_M` in `fire_trend.py`); pixels of the same granule never count as repeats of each
+  other, so a fire front that covers many pixels still counts as many. The repeats are kept and flagged (`dup`) in the cache, about 12-14%
+  of the pixels, so the chart history is unchanged. The date control's text counts all detections, the chart only the unique ones.
 * The map also has a **Night hotspots** layer (night pixels of the newest 15-20 UTC passes, i.e. 23:00-04:00 Singapore time, with the same
   quality filter and de-duplication; the name says "still being posted" until about 22:00 UTC). It is fetched on every run, is not cached and is not part of the chart.
 * A day is a UTC day. The latest day is partial until all its passes are posted (about 10:00 UTC) and is drawn lighter.
@@ -49,7 +53,7 @@ default branch. A new place name is one entry in `regions.geojson`; any other pl
 
 ## Cache
 
-`data` branch: one small file per UTC day with the daytime fire pixels of the whole domain (`fires_YYYYMMDD.npz`, about 40 KB),
+`data` branch: one small file per UTC day with all the daytime fire pixels of the whole domain and their repeat flag (`fires_YYYYMMDD.npz`, about 45 KB),
 the last 100 days, and one with the day's AOD averaged on a 0.1 degree grid (`aod_YYYYMMDD.npz`), the last 40 days, kept as a single
 force-pushed commit. The page reads the days it needs from `data/fires_YYYYMMDD.json` and `data/aod_YYYYMMDD.png` next to it
 (written by every run). The AOD days are downloaded newest first within their own time budget (`HOTSPOT_AOD_BUDGET_MIN`, 35 minutes;

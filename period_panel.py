@@ -2,7 +2,7 @@
 
 A control at the top left chooses what the daytime-hotspot and AOD layers show: a single date (the latest day when the page opens) or a
 date range.
-* hotspots: every daytime detection of the days in the period (a fire seen on two days is drawn twice), on one canvas;
+* hotspots: every daytime detection of the days in the period (both satellites, repeats within 500 m included; a fire seen on two days is drawn twice), on one canvas;
 * AOD: the mean of the daily AOD grids of the days in the period that have one, drawn as a coloured image;
 * the night layer shows the newest night, as before, with the same canvas;
 * the cloud layer (off until it is ticked in the layer menu) shows the mean cloud fraction of the days, as a white veil.
@@ -347,12 +347,12 @@ window.addEventListener('load', function () {
             var failed = (fireDays.length - fparts.length) + (aodDays.length - grids.length);
             var txt;
             if (one) {
-                txt = '<b>' + label(from) + '</b>: ' + (fparts.length ? fire.n.toLocaleString() + ' daytime hotspots' +
+                txt = '<b>' + label(from) + '</b>: ' + (fparts.length ? fire.n.toLocaleString() + ' daytime detections' +
                       (D.partial.indexOf(from) >= 0 ? ' (partial: passes still being posted)' : '') : 'no hotspot data for this date') +
                       '<br>AOD: ' + (grids.length ? 'available' : 'none for this date');
             } else {
                 var asked = dayCount(from, to);
-                txt = '<b>' + span(from, to) + '</b><br>' + fire.n.toLocaleString() + ' daytime hotspots (' + fparts.length + ' of ' + asked + ' days)<br>' +
+                txt = '<b>' + span(from, to) + '</b><br>' + fire.n.toLocaleString() + ' daytime detections (' + fparts.length + ' of ' + asked + ' days)<br>' +
                       (grids.length ? 'AOD: mean of ' + grids.length + ' of ' + asked + ' days' : 'AOD: no data for these days');
             }
             if (failed) txt += '<br><span style="color:#ffb74d">Could not load ' + failed + ' day file' + (failed === 1 ? '' : 's') +

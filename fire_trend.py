@@ -3,8 +3,9 @@
 Source: VIIRS EFIRE (375 m) of NOAA-20 and NOAA-21 on the NOAA open-data buckets (S-NPP is decommissioned). Only daytime fire pixels are kept
 (the afternoon passes over the domain: granules that start 03-08 UTC). A day is a UTC day, which is also the local day there.
 
-One fire is usually seen by several passes (two satellites, overlapping orbits), so pixels are de-duplicated: a pixel is dropped
-when an earlier granule already has a detection within DEDUPE_RADIUS_M of it. Pixels of one granule never drop each other, so a
+One fire is usually seen by several passes (two satellites, overlapping orbits). Every pixel is kept and drawn on the map, and a
+pixel is marked as a repeat ("dup") when an earlier granule already has a detection within DEDUPE_RADIUS_M of it; the area charts
+count the pixels that are not repeats. Pixels of one granule are never marked against each other, so a
 fire front that covers many neighbouring pixels still counts as many.
 """
 import datetime
@@ -30,11 +31,8 @@ FIRE_MASK_KEEP = (8, 9)                          # nominal and high confidence (
 MAX_DAYS = 90
 KEEP_DAYS = 100                                  # older cache files are deleted
 M_PER_DEG = 111195.0
-RULES = (f"v1 hours={DAY_HOURS.start}-{DAY_HOURS.stop - 1} mask={','.join(map(str, FIRE_MASK_KEEP))} "
-         f"dedupe={DEDUPE_RADIUS_M:g} order={','.join(SAT_ORDER)}")
-# Days cached while S-NPP still flew: its pixels came last in the de-duplication, so dropping them gives exactly what a new fetch
-# without S-NPP would (see migrate)
-LEGACY_RULES = RULES.replace(f"order={','.join(SAT_ORDER)}", "order=NOAA-21,NOAA-20,S-NPP")
+RULES = (f"v2 hours={DAY_HOURS.start}-{DAY_HOURS.stop - 1} mask={','.join(map(str, FIRE_MASK_KEEP))} "
+         f"flag-repeats={DEDUPE_RADIUS_M:g} order={','.join(SAT_ORDER)}")
 REGIONS_FILE = Path(__file__).resolve().parent / "regions.geojson"
 # south, west, north, east; same box as model_forecast (the 2 x 2 grid cells around the island)
 BOXES = {"Singapore": (1.125, 103.625, 1.625, 104.125)}
@@ -111,14 +109,15 @@ def _metres(lat, lon):
     return np.column_stack([np.asarray(lon, "float64") * M_PER_DEG * np.cos(np.radians(lat)), lat * M_PER_DEG])
 
 
-def dedupe(parts, radius_m=DEDUPE_RADIUS_M):
-    """parts: [(sat index, pixel arrays)] in priority order. Returns the unique pixels as one set of arrays plus a 'sat' array.
+def flag_repeats(parts, radius_m=DEDUPE_RADIUS_M):
+    """parts: [(sat index, pixel arrays)] in priority order. Returns every pixel as one set of arrays, plus 'sat' and 'dup'.
 
-    A pixel is dropped when an earlier part has a pixel within radius_m; pixels of the same part never drop each other.
+    A pixel is a repeat (dup) when an earlier part has a pixel that is not itself a repeat within radius_m; pixels of the same part
+    never mark each other. The pixels that are not repeats are exactly the unique pixels counted by the area charts.
     """
     from scipy.spatial import cKDTree
     kept_xy = np.empty((0, 2))
-    out = {"lat": [], "lon": [], "frp": [], "mask": [], "sat": []}
+    out = {"lat": [], "lon": [], "frp": [], "mask": [], "sat": [], "dup": []}
     for sat, a in parts:
         n = len(a["lat"])
         if n == 0:
@@ -129,11 +128,12 @@ def dedupe(parts, radius_m=DEDUPE_RADIUS_M):
             dist, _ = cKDTree(kept_xy).query(xy, distance_upper_bound=radius_m)
             keep = ~np.isfinite(dist)
         for k in ("lat", "lon", "frp", "mask"):
-            out[k].append(a[k][keep])
-        out["sat"].append(np.full(int(keep.sum()), sat, "int8"))
+            out[k].append(a[k])
+        out["sat"].append(np.full(n, sat, "int8"))
+        out["dup"].append(~keep)
         kept_xy = np.vstack([kept_xy, xy[keep]])
     if not out["lat"]:
-        return {**_EMPTY, "sat": np.empty(0, "int8")}
+        return {**_EMPTY, "sat": np.empty(0, "int8"), "dup": np.empty(0, bool)}
     return {k: np.concatenate(v) for k, v in out.items()}
 
 
@@ -178,9 +178,10 @@ def fetch_day(s3, sat_configs, date, domain, workers=8, hours=DAY_HOURS, daytime
     parts = [(jobs[i][0], results[i][0]) for i in sorted(results)]          # priority order: satellite, then time
     raw = {sat: int(sum(len(a["lat"]) for s, a in parts if s == k)) for k, sat in enumerate(SAT_ORDER)}
     dropped = {k: int(sum(results[i][1][k] for i in results)) for k in ("in_domain", "night", "low_conf", "persistent")}
-    fires = dedupe(parts)
+    fires = flag_repeats(parts)
     meta = {"date": f"{date:%Y-%m-%d}", "fetched_at": utc_now().isoformat(timespec="seconds"), "rules": RULES,
-            "granules": granules, "failed": len(failed), "raw": raw, "unique": int(len(fires["lat"])), "dropped": dropped}
+            "granules": granules, "failed": len(failed), "raw": raw, "detections": int(len(fires["lat"])),
+            "unique": int((~fires["dup"]).sum()), "dropped": dropped}
     if failed:
         print(f"[!] {date}: {len(failed)} granules failed, for example {failed[0]}")
     return fires, meta
@@ -196,12 +197,12 @@ def save_day(cache_dir, date, fires, meta):
     final = cache_file(cache_dir, date)
     tmp = final.with_name(final.stem + "_tmp.npz")
     np.savez_compressed(tmp, lat=fires["lat"], lon=fires["lon"], frp=fires["frp"], mask=fires["mask"], sat=fires["sat"],
-                        meta=np.array(json.dumps(meta)))
+                        dup=fires["dup"], meta=np.array(json.dumps(meta)))
     os.replace(tmp, final)
 
 
 def load_day(cache_dir, date):
-    """The cached day as {lat, lon, frp, mask, sat, meta, complete}, or None when missing or made with other rules."""
+    """The cached day as {lat, lon, frp, mask, sat, dup, meta, complete}, or None when missing or made with other rules."""
     path = cache_file(cache_dir, date)
     if not path.exists():
         return None
@@ -210,7 +211,7 @@ def load_day(cache_dir, date):
         meta = json.loads(str(z["meta"]))
         if meta.get("rules") != RULES:
             return None
-        day = {k: z[k] for k in ("lat", "lon", "frp", "mask", "sat")}
+        day = {k: z[k] for k in ("lat", "lon", "frp", "mask", "sat", "dup")}
     except Exception as e:
         print(f"[!] Cache file {path.name} unreadable ({e}); it will be fetched again")
         return None
@@ -218,29 +219,6 @@ def load_day(cache_dir, date):
     day["meta"] = meta
     day["complete"] = meta.get("failed", 0) == 0 and datetime.datetime.fromisoformat(meta["fetched_at"]) >= ready
     return day
-
-
-def migrate(cache_dir):
-    """Rewrite the cached days made with S-NPP without it: drop its pixels and its counts, keep everything else."""
-    n = 0
-    for path in sorted(Path(cache_dir).glob("fires_*.npz")):
-        try:
-            z = np.load(path)
-            meta = json.loads(str(z["meta"]))
-            if meta.get("rules") != LEGACY_RULES:
-                continue
-            keep = z["sat"] < len(SAT_ORDER)
-            day = {k: z[k][keep] for k in ("lat", "lon", "frp", "mask", "sat")}
-        except Exception as e:
-            print(f"[!] Cache file {path.name} unreadable ({e}); it will be fetched again")
-            continue
-        meta.update(rules=RULES, unique=int(keep.sum()),
-                    granules={k: v for k, v in meta.get("granules", {}).items() if k in SAT_ORDER},
-                    raw={k: v for k, v in meta.get("raw", {}).items() if k in SAT_ORDER})
-        save_day(cache_dir, datetime.datetime.strptime(path.stem[6:], "%Y%m%d").date(), day, meta)
-        n += 1
-    if n:
-        print(f"[*] Hotspot cache: {n} days converted to NOAA-20 / NOAA-21 only (S-NPP is decommissioned)")
 
 
 def export_day(cache_dir, date, out_dir):
@@ -276,7 +254,6 @@ def refresh(cache_dir, dates, s3, sat_configs, domain, budget_s=3600, workers=8)
     """
     start = time.monotonic()
     fetched, left = [], []
-    migrate(cache_dir)
     today = latest_day()
     for date in sorted(dates, reverse=True):
         if date > today:
@@ -294,7 +271,7 @@ def refresh(cache_dir, dates, s3, sat_configs, domain, budget_s=3600, workers=8)
             continue
         save_day(cache_dir, date, fires, meta)
         fetched.append(date)
-        print(f"[*] {date}: {meta['unique']} unique daytime hotspots from {sum(meta['raw'].values())} detections "
+        print(f"[*] {date}: {meta['detections']} daytime detections, {meta['unique']} not repeats "
               f"({meta['granules']} granules, {time.monotonic() - t0:.0f} s)")
     return fetched, sorted(left)
 
@@ -415,6 +392,6 @@ def build_series(cache_dir, dates, areas):
             if day is None:
                 out[a.id].append({"date": d, "count": None, "complete": False, "granules": {}, "unique_all": None})
             else:
-                out[a.id].append({"date": d, "count": a.count(day["lat"], day["lon"]), "complete": day["complete"],
+                out[a.id].append({"date": d, "count": a.count(day["lat"][~day["dup"]], day["lon"][~day["dup"]]), "complete": day["complete"],
                                   "granules": day["meta"]["granules"], "unique_all": day["meta"]["unique"]})
     return out
