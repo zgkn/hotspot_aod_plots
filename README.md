@@ -14,7 +14,7 @@ two days is drawn twice; smaller circles when there are very many) and the **mea
 have an AOD grid (the legend scale follows the data on screen); the text under the buttons says how many days each came from. On a phone
 the control is a small pill with the choice on it: tap it to open it. Hotspots go back as far as the data (up to 31 days are offered),
 AOD for the last 30 days; a date without AOD data shows no AOD. Tapping a hotspot shows its popup, with links to open the spot in
-Google Maps (pin or satellite view). The Night layer always shows the newest night.
+Google Maps (pin or satellite view) and a **Copy lat, lon** button (copies e.g. `-2.48310, 113.23920`). On a phone the legend steps aside while a popup is open. The Night layer always shows the newest night.
 
 The **Cloud mask** layer (in the layer menu, off until ticked) is a white veil: the share of the satellite pixels that were cloudy or
 probably cloudy (VIIRS JRR cloud mask, NOAA-20 and NOAA-21, the same afternoon passes as the AOD), averaged on a 0.1 degree grid; the

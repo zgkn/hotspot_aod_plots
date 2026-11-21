@@ -321,7 +321,7 @@ def main():
         #map-legend .lg-frp br {{ display: none; }}
         #map-legend .lg-item {{ display: inline-block; margin-right: 6px; white-space: nowrap; }}
         #map-legend hr {{ margin: 4px 0 !important; }}
-        body.trend-open #map-legend {{ display: none; }}
+        body.trend-open #map-legend, body.popup-open #map-legend {{ display: none; }}
         /* the layer menu is a small icon until it is tapped (it covered a large part of the map) */
         .leaflet-control-layers-expanded {{ max-width: 78vw; max-height: 50vh; overflow: auto; font-size: 12px; }}
         .leaflet-control-layers-expanded .leaflet-control-layers-toggle {{ display: block !important; }}

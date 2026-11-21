@@ -35,6 +35,10 @@ STYLE = """
 .pp-st b { color: #fff; }
 .pp-cl { color: #bbb; line-height: 1.35; }
 .aod-img { image-rendering: auto; }
+.pp-copy { margin-top: 5px; padding: 4px 9px; background: #f2f2f2; color: #222; border: 1px solid #999; border-radius: 4px;
+           font: 12px Arial, sans-serif; cursor: pointer; }
+.pp-copy:active { background: #ddd; }
+.pp-copy.ok { background: #d8f0d8; border-color: #5a9a5a; }
 @media (max-width: 760px) {
     .pp-box { width: 198px; padding: 6px 8px; font-size: 10px; }
     .pp-box.pp-min { max-width: 198px; }
@@ -178,8 +182,37 @@ window.addEventListener('load', function () {
             '<br>Lat: ' + la.toFixed(3) + '<br>Lon: ' + lo.toFixed(3) + '<br>FRP: <b>' + d.frp[i].toFixed(1) + ' MW</b>' +
             '<br><a href="https://www.google.com/maps/search/?api=1&query=' + at + '" target="_blank" rel="noopener">&#128205; Open in Google Maps</a>' +
             '<br><a href="https://www.google.com/maps/@?api=1&map_action=map&center=' + at + '&zoom=16&basemap=satellite" target="_blank" rel="noopener">' +
-            '&#128752;&#65039; Google Maps satellite view</a>';
+            '&#128752;&#65039; Google Maps satellite view</a>' +
+            '<br><button type="button" class="pp-copy" data-ll="' + la.toFixed(5) + ', ' + lo.toFixed(5) + '">&#128203; Copy lat, lon</button>';
     }
+    function copyText(text, done, fail) {        // the clipboard API needs a secure page (the published one is); the fallback covers the rest
+        function fallback() {
+            var ta = document.createElement('textarea');
+            ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+            document.body.appendChild(ta); ta.focus(); ta.select();
+            var ok = false;
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+            if (ok) done(); else fail();
+        }
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+        else fallback();
+    }
+    map.on('popupopen', function () { document.body.classList.add('popup-open'); });      // the legend steps aside on a phone (CSS)
+    map.on('popupclose', function () { document.body.classList.remove('popup-open'); });
+    map.on('popupopen', function (e) {           // the copy button of a hotspot popup
+        var el = e.popup.getElement(), btn = el && el.querySelector('.pp-copy');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+            var text = btn.getAttribute('data-ll'), label0 = btn.innerHTML;
+            copyText(text, function () {
+                btn.classList.add('ok'); btn.innerHTML = '&#10003; Copied ' + text;
+                setTimeout(function () { btn.classList.remove('ok'); btn.innerHTML = label0; }, 2500);
+            }, function () {                     // copying is blocked: show the text so it can be selected by hand
+                btn.innerHTML = text; btn.style.userSelect = 'text';
+            });
+        });
+    });
     map.on('click', function (e) {               // registered before the area handler: a hotspot wins over the area under it
         var layers = [nightLayer, dayLayer];
         for (var k = 0; k < layers.length; k++) {
